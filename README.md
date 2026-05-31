@@ -42,6 +42,7 @@ TELEGRAM_BOT_TOKEN=...
 OPENAI_API_KEY=...
 OPENAI_TEXT_MODEL=gpt-5.2
 OPENAI_VISION_MODEL=gpt-5.2
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 DATABASE_URL=sqlite+aiosqlite:////app/data/bwtft.sqlite3
 ```
 

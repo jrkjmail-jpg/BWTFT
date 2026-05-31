@@ -12,9 +12,10 @@ from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
 from bwtft_bot.db import async_session, init_db
-from bwtft_bot.keyboards import page_actions_keyboard, pages_keyboard
-from bwtft_bot.llm import create_character_prompt, generate_book
+from bwtft_bot.keyboards import page_actions_keyboard, pages_keyboard, story_review_keyboard
+from bwtft_bot.llm import create_character_prompt, generate_book, generate_story, revise_story, transcribe_voice
 from bwtft_bot.repository import get_book, get_page_payload, save_book
+from bwtft_bot.schemas import StoryDraft
 from bwtft_bot.telegram_text import html_escape, split_message
 
 
@@ -22,12 +23,15 @@ class BookFlow(StatesGroup):
     waiting_child_info = State()
     waiting_photo = State()
     waiting_pages_count = State()
+    reviewing_story = State()
+    waiting_story_revision = State()
 
 
 router = Router()
 ALBUM_WAIT_SECONDS = 1.5
 CHARACTER_PROMPT_TIMEOUT_SECONDS = 45
 BOOK_GENERATION_TIMEOUT_SECONDS = 240
+VOICE_TRANSCRIPTION_TIMEOUT_SECONDS = 150
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +54,35 @@ async def download_message_photo(message: Message, bot: Bot) -> tuple[bytes, str
         return None
     buffer.seek(0)
     return buffer.read(), "image/jpeg"
+
+
+async def download_voice(message: Message, bot: Bot) -> bytes | None:
+    if not message.voice:
+        return None
+    file = await bot.get_file(message.voice.file_id)
+    buffer = await bot.download_file(file.file_path)
+    if buffer is None:
+        return None
+    buffer.seek(0)
+    return buffer.read()
+
+
+def format_story(story: StoryDraft) -> str:
+    return "\n\n".join(
+        f"Страница {page.page_number}\n{page.page_text}" for page in story.pages
+    )
+
+
+async def send_story_review(message: Message, story: StoryDraft) -> None:
+    await message.answer("Сказка готова. Ниже текст, разбитый по страницам.")
+    chunks = split_message(format_story(story))
+    for chunk in chunks:
+        await message.answer(chunk, parse_mode=None)
+    await message.answer(
+        "Проверьте сказку. Если нужны правки, нажмите «Редактировать». "
+        "Если всё устраивает, нажмите «Дальше», и я создам Scene Blueprint и промпты.",
+        reply_markup=story_review_keyboard(),
+    )
 
 
 async def finish_character_prompt(
@@ -177,40 +210,141 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     child_info = data["child_info"]
     character_prompt = data["character_prompt"]
 
-    await message.answer("Генерирую сказку, сцены и финальные промпты. Это может занять немного времени.")
+    await message.answer("Генерирую сказку и разбиваю её по страницам. Это может занять немного времени.")
     try:
-        generated = await asyncio.wait_for(
-            generate_book(child_info, character_prompt, pages_count),
+        story = await asyncio.wait_for(
+            generate_story(child_info, character_prompt, pages_count),
             timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
         )
     except TimeoutError:
-        logger.exception("Timed out while generating book")
+        logger.exception("Timed out while generating story")
         await message.answer(
-            "OpenAI слишком долго не отвечает на генерацию книги.\n\n"
+            "OpenAI слишком долго не отвечает на генерацию сказки.\n\n"
             "Попробуйте меньше страниц или проверьте OPENAI_TEXT_MODEL. "
             "Для проверки лучше временно поставить gpt-5.2 или gpt-4.1-mini."
         )
         return
     except Exception as exc:
-        logger.exception("Failed to generate book")
+        logger.exception("Failed to generate story")
         await message.answer(
-            "Не получилось сгенерировать книгу через OpenAI.\n\n"
+            "Не получилось сгенерировать сказку через OpenAI.\n\n"
             f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
             "Проверьте OPENAI_API_KEY и точное имя модели в OPENAI_TEXT_MODEL, "
             "затем введите количество страниц ещё раз."
         )
         return
 
+    await state.update_data(story_json=story.model_dump_json())
+    await state.set_state(BookFlow.reviewing_story)
+    await send_story_review(message, story)
+
+
+@router.callback_query(BookFlow.reviewing_story, F.data == "story:edit")
+async def request_story_revision(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(BookFlow.waiting_story_revision)
+    await callback.message.answer(
+        "Напишите правки к сказке текстом или отправьте голосовое сообщение. "
+        "Например: «сделай финал смешнее» или «добавь больше динозавров»."
+    )
+    await callback.answer()
+
+
+@router.message(BookFlow.waiting_story_revision, F.text)
+async def collect_story_revision_text(message: Message, state: FSMContext) -> None:
+    await apply_story_revision(message, state, message.text)
+
+
+@router.message(BookFlow.waiting_story_revision, F.voice)
+async def collect_story_revision_voice(message: Message, state: FSMContext, bot: Bot) -> None:
+    voice_bytes = await download_voice(message, bot)
+    if voice_bytes is None:
+        await message.answer("Не удалось скачать голосовое сообщение. Попробуйте ещё раз.")
+        return
+    await message.answer("Расшифровываю голосовые правки...")
+    try:
+        revision_text = await asyncio.wait_for(
+            transcribe_voice(voice_bytes),
+            timeout=VOICE_TRANSCRIPTION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to transcribe voice revision")
+        await message.answer(
+            "Не получилось распознать голосовое сообщение.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Можно отправить правки обычным текстом."
+        )
+        return
+    await message.answer(f"Понял правки:\n\n{revision_text}")
+    await apply_story_revision(message, state, revision_text)
+
+
+@router.message(BookFlow.waiting_story_revision)
+async def collect_story_revision_fallback(message: Message) -> None:
+    await message.answer("Отправьте правки текстом или голосовым сообщением.")
+
+
+async def apply_story_revision(message: Message, state: FSMContext, revision_text: str) -> None:
+    data = await state.get_data()
+    story = StoryDraft.model_validate_json(data["story_json"])
+    await message.answer("Вношу правки в сказку...")
+    try:
+        revised = await asyncio.wait_for(
+            revise_story(
+                data["child_info"],
+                data["character_prompt"],
+                story,
+                revision_text,
+            ),
+            timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to revise story")
+        await message.answer(
+            "Не получилось отредактировать сказку через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Попробуйте сформулировать правки короче."
+        )
+        return
+    await state.update_data(story_json=revised.model_dump_json())
+    await state.set_state(BookFlow.reviewing_story)
+    await send_story_review(message, revised)
+
+
+@router.callback_query(BookFlow.reviewing_story, F.data == "story:approve")
+async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    story = StoryDraft.model_validate_json(data["story_json"])
+    child_info = data["child_info"]
+    character_prompt = data["character_prompt"]
+
+    await callback.message.answer(
+        "Отлично. Создаю Scene Blueprint и финальные промпты для каждой страницы..."
+    )
+    await callback.answer()
+    try:
+        generated = await asyncio.wait_for(
+            generate_book(child_info, character_prompt, story),
+            timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate prompts")
+        await callback.message.answer(
+            "Не получилось создать Scene Blueprint и промпты через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Нажмите «Дальше» ещё раз или попробуйте уменьшить количество страниц."
+        )
+        return
+
     async with async_session() as session:
         book = await save_book(
             session=session,
-            user_id=message.from_user.id,
+            user_id=callback.from_user.id,
             generated=generated,
             character_prompt_text=character_prompt,
         )
 
     await state.clear()
-    await message.answer(
+    await callback.message.answer(
         f"Книга готова: {book.pages_count} страниц. Выберите страницу:",
         reply_markup=pages_keyboard(book.id, book.pages_count),
     )

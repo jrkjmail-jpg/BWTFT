@@ -35,8 +35,8 @@ def final_prompt(character_prompt: str, scene_blueprint: str, page_number: int) 
     )
 
 
-def book_generation_prompt(child_info: str, character_prompt: str, pages_count: int) -> str:
-    return f"""Создай персонализированную детскую сказку и промпты сцен.
+def story_generation_prompt(child_info: str, character_prompt: str, pages_count: int) -> str:
+    return f"""Создай персонализированную детскую сказку.
 
 Информация о ребёнке в свободной форме:
 {child_info}
@@ -61,10 +61,41 @@ def book_generation_prompt(child_info: str, character_prompt: str, pages_count: 
 - каждая страница должна звучать как отдельная страница детской книги;
 - переходы между страницами плавные.
 
-Для каждой страницы создай подробный Scene Blueprint, включающий:
-главную сцену, действие, персонажей, эмоции, позы, место, окружение,
-освещение, атмосферу, важные объекты, композицию кадра, настроение,
-визуальные детали.
+Верни только JSON без markdown. Формат:
+{{
+  "child_name": "имя ребёнка или null",
+  "pages": [
+    {{
+      "page_number": 1,
+      "page_text": "текст страницы"
+    }}
+  ]
+}}
+"""
+
+
+def story_revision_prompt(
+    child_info: str,
+    character_prompt: str,
+    current_story_json: str,
+    revision_request: str,
+) -> str:
+    return f"""Отредактируй персонализированную детскую сказку по пожеланиям автора.
+
+Информация о ребёнке:
+{child_info}
+
+Постоянное описание внешности персонажа:
+{character_prompt}
+
+Текущая сказка JSON:
+{current_story_json}
+
+Пожелания к редакции:
+{revision_request}
+
+Сохрани то же количество страниц и последовательную нумерацию.
+Каждая страница: 300-700 символов, простой детский язык, одна визуальная сцена.
 
 Верни только JSON без markdown. Формат:
 {{
@@ -72,7 +103,37 @@ def book_generation_prompt(child_info: str, character_prompt: str, pages_count: 
   "pages": [
     {{
       "page_number": 1,
-      "page_text": "текст страницы",
+      "page_text": "текст страницы"
+    }}
+  ]
+}}
+"""
+
+
+def scene_blueprints_prompt(child_info: str, character_prompt: str, story_json: str) -> str:
+    return f"""Создай Scene Blueprint для каждой страницы утверждённой детской сказки.
+
+Информация о ребёнке:
+{child_info}
+
+Постоянное описание внешности персонажа:
+{character_prompt}
+
+Утверждённая сказка JSON:
+{story_json}
+
+Для каждой страницы создай подробный Scene Blueprint, включающий:
+главную сцену, действие, участвующих персонажей, эмоции персонажей,
+позы и действия, место действия, окружение, освещение, атмосферу,
+важные объекты, композицию кадра, настроение сцены, визуальные детали.
+
+Не меняй текст страниц. Верни только JSON без markdown. Формат:
+{{
+  "child_name": "имя ребёнка или null",
+  "pages": [
+    {{
+      "page_number": 1,
+      "page_text": "исходный текст страницы без изменений",
       "scene_blueprint": "подробное описание сцены"
     }}
   ]

@@ -1,6 +1,17 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
+def story_review_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Редактировать", callback_data="story:edit"),
+                InlineKeyboardButton(text="Дальше", callback_data="story:approve"),
+            ]
+        ]
+    )
+
+
 def pages_keyboard(book_id: int, pages_count: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
