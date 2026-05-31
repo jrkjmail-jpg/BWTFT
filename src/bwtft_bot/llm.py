@@ -9,7 +9,7 @@ from bwtft_bot.prompts import CHARACTER_STYLE, book_generation_prompt
 from bwtft_bot.schemas import GeneratedBook
 
 
-client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=30.0, max_retries=0)
+client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
 
 
 PhotoInput = tuple[bytes, str]
@@ -29,7 +29,7 @@ async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
             }
         )
 
-    response = await client.chat.completions.create(
+    response = await client.with_options(timeout=60.0).chat.completions.create(
         model=settings.openai_vision_model,
         messages=[
             {
@@ -64,7 +64,7 @@ async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
 
 
 async def generate_book(child_info: str, character_prompt: str, pages_count: int) -> GeneratedBook:
-    response = await client.chat.completions.create(
+    response = await client.with_options(timeout=240.0).chat.completions.create(
         model=settings.openai_text_model,
         response_format={"type": "json_object"},
         messages=[
