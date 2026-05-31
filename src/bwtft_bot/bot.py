@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -25,6 +26,7 @@ class BookFlow(StatesGroup):
 
 router = Router()
 ALBUM_WAIT_SECONDS = 1.5
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +46,7 @@ async def download_message_photo(message: Message, bot: Bot) -> tuple[bytes, str
     buffer = await bot.download_file(file.file_path)
     if buffer is None:
         return None
+    buffer.seek(0)
     return buffer.read(), "image/jpeg"
 
 
@@ -70,7 +73,18 @@ async def finish_character_prompt(
     await message.answer(
         f"Получил фото: {len(photos)}. Создаю одно постоянное описание внешности персонажа..."
     )
-    character_prompt = await create_character_prompt(photos)
+    try:
+        character_prompt = await create_character_prompt(photos)
+    except Exception as exc:
+        logger.exception("Failed to create character prompt")
+        await message.answer(
+            "Не получилось создать описание внешности через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Проверьте OPENAI_API_KEY и точное имя модели в OPENAI_VISION_MODEL, "
+            "затем отправьте фото ещё раз."
+        )
+        return
+
     await state.update_data(character_prompt=character_prompt)
     await state.set_state(BookFlow.waiting_pages_count)
     await message.answer(
@@ -150,7 +164,17 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     character_prompt = data["character_prompt"]
 
     await message.answer("Генерирую сказку, сцены и финальные промпты. Это может занять немного времени.")
-    generated = await generate_book(child_info, character_prompt, pages_count)
+    try:
+        generated = await generate_book(child_info, character_prompt, pages_count)
+    except Exception as exc:
+        logger.exception("Failed to generate book")
+        await message.answer(
+            "Не получилось сгенерировать книгу через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Проверьте OPENAI_API_KEY и точное имя модели в OPENAI_TEXT_MODEL, "
+            "затем введите количество страниц ещё раз."
+        )
+        return
 
     async with async_session() as session:
         book = await save_book(
@@ -242,6 +266,7 @@ async def create_dispatcher() -> Dispatcher:
 
 
 async def run_bot() -> None:
+    logging.basicConfig(level=logging.INFO)
     bot = Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
