@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
@@ -15,6 +15,7 @@ from bwtft_bot.db import async_session, init_db
 from bwtft_bot.keyboards import (
     page_actions_keyboard,
     pages_keyboard,
+    remove_keyboard,
     story_review_keyboard,
     theme_options_keyboard,
 )
@@ -26,7 +27,7 @@ from bwtft_bot.llm import (
     revise_story,
     transcribe_voice,
 )
-from bwtft_bot.repository import get_book, get_page_payload, save_book
+from bwtft_bot.repository import get_page_payload, save_book
 from bwtft_bot.schemas import StoryDraft, StoryThemeOption, StoryThemeOptions
 from bwtft_bot.telegram_text import html_escape, split_message
 
@@ -38,6 +39,7 @@ class BookFlow(StatesGroup):
     waiting_pages_count = State()
     reviewing_story = State()
     waiting_story_revision = State()
+    browsing_pages = State()
 
 
 router = Router()
@@ -201,7 +203,8 @@ async def start(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Привет! Отправьте одним сообщением всё, что хотите учесть о ребёнке: "
         "имя, возраст, город, семью, любимые игрушки, интересы, мечты, страхи "
-        "и любые пожелания к сказке."
+        "и любые пожелания к сказке.",
+        reply_markup=remove_keyboard(),
     )
 
 
@@ -233,13 +236,12 @@ async def collect_child_info(message: Message, state: FSMContext) -> None:
     await send_theme_options(message, options.options)
 
 
-@router.callback_query(BookFlow.choosing_theme, F.data == "theme:more")
-async def more_theme_options(callback: CallbackQuery, state: FSMContext) -> None:
+@router.message(BookFlow.choosing_theme, F.text == "Ещё варианты")
+async def more_theme_options(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     child_info = data["child_info"]
     excluded_titles = data.get("theme_excluded_titles", [])
-    await callback.message.answer("Придумываю ещё 5 вариантов тематики...")
-    await callback.answer()
+    await message.answer("Придумываю ещё 5 вариантов тематики...")
     try:
         options = await asyncio.wait_for(
             generate_theme_options(child_info, excluded_titles),
@@ -247,7 +249,7 @@ async def more_theme_options(callback: CallbackQuery, state: FSMContext) -> None
         )
     except Exception as exc:
         logger.exception("Failed to generate more theme options")
-        await callback.message.answer(
+        await message.answer(
             "Не получилось придумать ещё варианты.\n\n"
             f"Техническая ошибка: {type(exc).__name__}: {exc}"
         )
@@ -257,26 +259,30 @@ async def more_theme_options(callback: CallbackQuery, state: FSMContext) -> None
         theme_options_json=options.model_dump_json(),
         theme_excluded_titles=excluded_titles + [option.title for option in options.options],
     )
-    await send_theme_options(callback.message, options.options)
+    await send_theme_options(message, options.options)
 
 
-@router.callback_query(BookFlow.choosing_theme, F.data.startswith("theme:select:"))
-async def select_theme(callback: CallbackQuery, state: FSMContext) -> None:
-    selected_number = int(callback.data.split(":")[-1])
+@router.message(BookFlow.choosing_theme, F.text.startswith("Выбрать "))
+async def select_theme(message: Message, state: FSMContext) -> None:
+    try:
+        selected_number = int(message.text.removeprefix("Выбрать ").strip())
+    except ValueError:
+        await message.answer("Выберите тематику кнопкой в меню.")
+        return
     data = await state.get_data()
     options = StoryThemeOptions.model_validate_json(data["theme_options_json"])
     selected = next((option for option in options.options if option.number == selected_number), None)
     if selected is None:
-        await callback.answer("Вариант не найден. Нажмите «Ещё варианты» или выберите другой.", show_alert=True)
+        await message.answer("Вариант не найден. Нажмите «Ещё варианты» или выберите другой.")
         return
 
     await state.update_data(selected_theme=selected_theme_text(selected))
     await state.set_state(BookFlow.waiting_photo)
-    await callback.message.answer(
+    await message.answer(
         f"Выбрана тематика:\n\n{theme_to_text(selected)}\n\nТеперь загрузите фотографию ребёнка.",
         parse_mode=None,
+        reply_markup=remove_keyboard(),
     )
-    await callback.answer()
 
 
 @router.message(BookFlow.choosing_theme)
@@ -351,14 +357,14 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     await send_story_review(message, story)
 
 
-@router.callback_query(BookFlow.reviewing_story, F.data == "story:edit")
-async def request_story_revision(callback: CallbackQuery, state: FSMContext) -> None:
+@router.message(BookFlow.reviewing_story, F.text == "Редактировать")
+async def request_story_revision(message: Message, state: FSMContext) -> None:
     await state.set_state(BookFlow.waiting_story_revision)
-    await callback.message.answer(
+    await message.answer(
         "Напишите правки к сказке текстом или отправьте голосовое сообщение. "
-        "Например: «сделай финал смешнее» или «добавь больше динозавров»."
+        "Например: «сделай финал смешнее» или «добавь больше динозавров».",
+        reply_markup=remove_keyboard(),
     )
-    await callback.answer()
 
 
 @router.message(BookFlow.waiting_story_revision, F.text)
@@ -423,18 +429,18 @@ async def apply_story_revision(message: Message, state: FSMContext, revision_tex
     await send_story_review(message, revised)
 
 
-@router.callback_query(BookFlow.reviewing_story, F.data == "story:approve")
-async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
+@router.message(BookFlow.reviewing_story, F.text == "Дальше")
+async def approve_story(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     story = StoryDraft.model_validate_json(data["story_json"])
     child_info = data["child_info"]
     character_prompt = data["character_prompt"]
     selected_theme = data["selected_theme"]
 
-    await callback.message.answer(
-        "Отлично. Создаю Scene Blueprint и финальные промпты для каждой страницы..."
+    await message.answer(
+        "Отлично. Создаю Scene Blueprint и финальные промпты для каждой страницы...",
+        reply_markup=remove_keyboard(),
     )
-    await callback.answer()
     try:
         generated = await asyncio.wait_for(
             generate_book(child_info, character_prompt, selected_theme, story),
@@ -442,7 +448,7 @@ async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
         )
     except Exception as exc:
         logger.exception("Failed to generate prompts")
-        await callback.message.answer(
+        await message.answer(
             "Не получилось создать Scene Blueprint и промпты через OpenAI.\n\n"
             f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
             "Нажмите «Дальше» ещё раз или попробуйте уменьшить количество страниц."
@@ -452,43 +458,49 @@ async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
     async with async_session() as session:
         book = await save_book(
             session=session,
-            user_id=callback.from_user.id,
+            user_id=message.from_user.id,
             generated=generated,
             character_prompt_text=character_prompt,
         )
 
-    await state.clear()
-    await callback.message.answer(
+    await state.set_state(BookFlow.browsing_pages)
+    await state.update_data(current_book_id=book.id, current_pages_count=book.pages_count)
+    await message.answer(
         f"Книга готова: {book.pages_count} страниц. Выберите страницу:",
-        reply_markup=pages_keyboard(book.id, book.pages_count),
+        reply_markup=pages_keyboard(book.pages_count),
     )
 
 
-@router.callback_query(F.data.startswith("menu:"))
-async def show_menu(callback: CallbackQuery) -> None:
-    book_id = int(callback.data.split(":")[1])
-    async with async_session() as session:
-        book = await get_book(session, book_id)
-    if not book:
-        await callback.answer("Книга не найдена.", show_alert=True)
-        return
-    await callback.message.edit_text(
+@router.message(BookFlow.reviewing_story)
+async def reviewing_story_fallback(message: Message) -> None:
+    await message.answer("Выберите «Редактировать» или «Дальше» кнопкой в меню.")
+
+
+@router.message(BookFlow.browsing_pages, F.text == "К меню страниц")
+async def show_menu(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    pages_count = data["current_pages_count"]
+    await message.answer(
         "Выберите страницу:",
-        reply_markup=pages_keyboard(book.id, book.pages_count),
+        reply_markup=pages_keyboard(pages_count),
     )
-    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("page:"))
-async def show_page(callback: CallbackQuery) -> None:
-    _, book_id_raw, page_raw = callback.data.split(":")
-    book_id = int(book_id_raw)
-    page_number = int(page_raw)
+@router.message(BookFlow.browsing_pages, F.text.startswith("Страница "))
+async def show_page(message: Message, state: FSMContext) -> None:
+    try:
+        page_number = int(message.text.removeprefix("Страница ").strip())
+    except ValueError:
+        await message.answer("Выберите страницу кнопкой в меню.")
+        return
+
+    data = await state.get_data()
+    book_id = data["current_book_id"]
 
     async with async_session() as session:
         payload = await get_page_payload(session, book_id, page_number)
     if not payload:
-        await callback.answer("Страница не найдена.", show_alert=True)
+        await message.answer("Страница не найдена.")
         return
 
     page_text, scene_blueprint, prompt = payload
@@ -502,28 +514,35 @@ async def show_page(callback: CallbackQuery) -> None:
     )
     if len(text) > 3900:
         text = text[:3800] + "\n\n...Промпт слишком длинный для одного сообщения. Нажмите «Скопировать промпт»."
-    await callback.message.edit_text(
+    await state.update_data(current_page_number=page_number)
+    await message.answer(
         text,
-        reply_markup=page_actions_keyboard(book_id, page_number),
+        reply_markup=page_actions_keyboard(),
     )
-    await callback.answer()
 
 
-@router.callback_query(F.data.startswith("copy:"))
-async def copy_prompt(callback: CallbackQuery) -> None:
-    _, book_id_raw, page_raw = callback.data.split(":")
-    book_id = int(book_id_raw)
-    page_number = int(page_raw)
+@router.message(BookFlow.browsing_pages, F.text == "Скопировать промпт")
+async def copy_prompt(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    book_id = data["current_book_id"]
+    page_number = data.get("current_page_number")
+    if not page_number:
+        await message.answer("Сначала выберите страницу.")
+        return
 
     async with async_session() as session:
         payload = await get_page_payload(session, book_id, page_number)
     if not payload:
-        await callback.answer("Промпт не найден.", show_alert=True)
+        await message.answer("Промпт не найден.")
         return
     prompt = payload[2]
     for chunk in split_message(f"Промпт для страницы {page_number}:\n\n{prompt}"):
-        await callback.message.answer(chunk, parse_mode=None)
-    await callback.answer("Промпт отправлен отдельным сообщением.")
+        await message.answer(chunk, parse_mode=None)
+
+
+@router.message(BookFlow.browsing_pages)
+async def browsing_pages_fallback(message: Message) -> None:
+    await message.answer("Выберите страницу или действие кнопкой в меню.")
 
 
 @router.message()

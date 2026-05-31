@@ -1,72 +1,61 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from bwtft_bot.schemas import StoryThemeOption
 
 
-def theme_options_keyboard(options: list[StoryThemeOption]) -> InlineKeyboardMarkup:
+def remove_keyboard() -> ReplyKeyboardRemove:
+    return ReplyKeyboardRemove()
+
+
+def theme_options_keyboard(options: list[StoryThemeOption]) -> ReplyKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(
-                text=f"Выбрать {option.number}",
-                callback_data=f"theme:select:{option.number}",
-            )
-        ]
+        [KeyboardButton(text=f"Выбрать {option.number}")]
         for option in options
     ]
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="Ещё варианты",
-                callback_data="theme:more",
-            )
-        ]
+    rows.append([KeyboardButton(text="Ещё варианты")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
     )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def story_review_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def story_review_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
             [
-                InlineKeyboardButton(text="Редактировать", callback_data="story:edit"),
-                InlineKeyboardButton(text="Дальше", callback_data="story:approve"),
+                KeyboardButton(text="Редактировать"),
+                KeyboardButton(text="Дальше"),
             ]
-        ]
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
     )
 
 
-def pages_keyboard(book_id: int, pages_count: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
+def pages_keyboard(pages_count: int) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
     for page_number in range(1, pages_count + 1):
-        row.append(
-            InlineKeyboardButton(
-                text=f"Страница {page_number}",
-                callback_data=f"page:{book_id}:{page_number}",
-            )
-        )
+        row.append(KeyboardButton(text=f"Страница {page_number}"))
         if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
-def page_actions_keyboard(book_id: int, page_number: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Скопировать промпт",
-                    callback_data=f"copy:{book_id}:{page_number}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="К меню страниц",
-                    callback_data=f"menu:{book_id}",
-                )
-            ],
-        ]
+def page_actions_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Скопировать промпт")],
+            [KeyboardButton(text="К меню страниц")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
     )
