@@ -26,6 +26,8 @@ class BookFlow(StatesGroup):
 
 router = Router()
 ALBUM_WAIT_SECONDS = 1.5
+CHARACTER_PROMPT_TIMEOUT_SECONDS = 45
+BOOK_GENERATION_TIMEOUT_SECONDS = 240
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +76,19 @@ async def finish_character_prompt(
         f"Получил фото: {len(photos)}. Создаю одно постоянное описание внешности персонажа..."
     )
     try:
-        character_prompt = await create_character_prompt(photos)
+        character_prompt = await asyncio.wait_for(
+            create_character_prompt(photos),
+            timeout=CHARACTER_PROMPT_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.exception("Timed out while creating character prompt")
+        await message.answer(
+            "OpenAI слишком долго не отвечает на описание фото.\n\n"
+            "Чаще всего это из-за имени модели или сетевого доступа на хостинге. "
+            "Проверьте OPENAI_VISION_MODEL. Для проверки лучше временно поставить "
+            "gpt-5.2 или gpt-4.1-mini и отправить фото ещё раз."
+        )
+        return
     except Exception as exc:
         logger.exception("Failed to create character prompt")
         await message.answer(
@@ -165,7 +179,18 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
 
     await message.answer("Генерирую сказку, сцены и финальные промпты. Это может занять немного времени.")
     try:
-        generated = await generate_book(child_info, character_prompt, pages_count)
+        generated = await asyncio.wait_for(
+            generate_book(child_info, character_prompt, pages_count),
+            timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.exception("Timed out while generating book")
+        await message.answer(
+            "OpenAI слишком долго не отвечает на генерацию книги.\n\n"
+            "Попробуйте меньше страниц или проверьте OPENAI_TEXT_MODEL. "
+            "Для проверки лучше временно поставить gpt-5.2 или gpt-4.1-mini."
+        )
+        return
     except Exception as exc:
         logger.exception("Failed to generate book")
         await message.answer(
