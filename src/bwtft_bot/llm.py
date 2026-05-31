@@ -11,8 +11,9 @@ from bwtft_bot.prompts import (
     scene_blueprints_prompt,
     story_generation_prompt,
     story_revision_prompt,
+    theme_options_prompt,
 )
-from bwtft_bot.schemas import GeneratedBook, StoryDraft
+from bwtft_bot.schemas import GeneratedBook, StoryDraft, StoryThemeOptions
 
 
 client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
@@ -69,7 +70,38 @@ async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
     return f"{description.strip()}\n\n{CHARACTER_STYLE}"
 
 
-async def generate_story(child_info: str, character_prompt: str, pages_count: int) -> StoryDraft:
+async def generate_theme_options(
+    child_info: str,
+    excluded_titles: list[str] | None = None,
+) -> StoryThemeOptions:
+    response = await client.with_options(timeout=120.0).chat.completions.create(
+        model=settings.openai_text_model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты креативный редактор детских книг. "
+                    "Предлагай разные, добрые и визуально богатые тематики."
+                ),
+            },
+            {
+                "role": "user",
+                "content": theme_options_prompt(child_info, excluded_titles),
+            },
+        ],
+        max_completion_tokens=3000,
+    )
+    raw = response.choices[0].message.content or "{}"
+    return StoryThemeOptions.model_validate(json.loads(raw))
+
+
+async def generate_story(
+    child_info: str,
+    character_prompt: str,
+    selected_theme: str,
+    pages_count: int,
+) -> StoryDraft:
     response = await client.with_options(timeout=240.0).chat.completions.create(
         model=settings.openai_text_model,
         response_format={"type": "json_object"},
@@ -83,7 +115,12 @@ async def generate_story(child_info: str, character_prompt: str, pages_count: in
             },
             {
                 "role": "user",
-                "content": story_generation_prompt(child_info, character_prompt, pages_count),
+                "content": story_generation_prompt(
+                    child_info,
+                    character_prompt,
+                    selected_theme,
+                    pages_count,
+                ),
             },
         ],
         max_completion_tokens=8000,
@@ -99,6 +136,7 @@ async def generate_story(child_info: str, character_prompt: str, pages_count: in
 async def revise_story(
     child_info: str,
     character_prompt: str,
+    selected_theme: str,
     current_story: StoryDraft,
     revision_request: str,
 ) -> StoryDraft:
@@ -119,6 +157,7 @@ async def revise_story(
                 "content": story_revision_prompt(
                     child_info,
                     character_prompt,
+                    selected_theme,
                     current_story_json,
                     revision_request,
                 ),
@@ -133,7 +172,12 @@ async def revise_story(
     return revised
 
 
-async def generate_book(child_info: str, character_prompt: str, story: StoryDraft) -> GeneratedBook:
+async def generate_book(
+    child_info: str,
+    character_prompt: str,
+    selected_theme: str,
+    story: StoryDraft,
+) -> GeneratedBook:
     story_json = json.dumps(story.model_dump(), ensure_ascii=False)
     response = await client.with_options(timeout=240.0).chat.completions.create(
         model=settings.openai_text_model,
@@ -148,7 +192,12 @@ async def generate_book(child_info: str, character_prompt: str, story: StoryDraf
             },
             {
                 "role": "user",
-                "content": scene_blueprints_prompt(child_info, character_prompt, story_json),
+                "content": scene_blueprints_prompt(
+                    child_info,
+                    character_prompt,
+                    selected_theme,
+                    story_json,
+                ),
             },
         ],
         max_completion_tokens=12000,

@@ -1,5 +1,28 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bwtft_bot.schemas import StoryThemeOption
+
+
+def theme_options_keyboard(options: list[StoryThemeOption]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"Выбрать {option.number}",
+                callback_data=f"theme:select:{option.number}",
+            )
+        ]
+        for option in options
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Ещё варианты",
+                callback_data="theme:more",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def story_review_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

@@ -12,15 +12,28 @@ from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
 from bwtft_bot.db import async_session, init_db
-from bwtft_bot.keyboards import page_actions_keyboard, pages_keyboard, story_review_keyboard
-from bwtft_bot.llm import create_character_prompt, generate_book, generate_story, revise_story, transcribe_voice
+from bwtft_bot.keyboards import (
+    page_actions_keyboard,
+    pages_keyboard,
+    story_review_keyboard,
+    theme_options_keyboard,
+)
+from bwtft_bot.llm import (
+    create_character_prompt,
+    generate_book,
+    generate_story,
+    generate_theme_options,
+    revise_story,
+    transcribe_voice,
+)
 from bwtft_bot.repository import get_book, get_page_payload, save_book
-from bwtft_bot.schemas import StoryDraft
+from bwtft_bot.schemas import StoryDraft, StoryThemeOption, StoryThemeOptions
 from bwtft_bot.telegram_text import html_escape, split_message
 
 
 class BookFlow(StatesGroup):
     waiting_child_info = State()
+    choosing_theme = State()
     waiting_photo = State()
     waiting_pages_count = State()
     reviewing_story = State()
@@ -31,6 +44,7 @@ router = Router()
 ALBUM_WAIT_SECONDS = 1.5
 CHARACTER_PROMPT_TIMEOUT_SECONDS = 45
 BOOK_GENERATION_TIMEOUT_SECONDS = 240
+THEME_GENERATION_TIMEOUT_SECONDS = 120
 VOICE_TRANSCRIPTION_TIMEOUT_SECONDS = 150
 logger = logging.getLogger(__name__)
 
@@ -70,6 +84,31 @@ async def download_voice(message: Message, bot: Bot) -> bytes | None:
 def format_story(story: StoryDraft) -> str:
     return "\n\n".join(
         f"Страница {page.page_number}\n{page.page_text}" for page in story.pages
+    )
+
+
+def theme_to_text(option: StoryThemeOption) -> str:
+    summary = "\n".join(f"- {sentence}" for sentence in option.summary)
+    return f"{option.number}. {option.title}\n{summary}"
+
+
+def format_theme_options(options: list[StoryThemeOption]) -> str:
+    return "\n\n".join(theme_to_text(option) for option in options)
+
+
+def selected_theme_text(option: StoryThemeOption) -> str:
+    return f"{option.title}\n" + "\n".join(option.summary)
+
+
+async def send_theme_options(message: Message, options: list[StoryThemeOption]) -> None:
+    await message.answer(
+        "Я предложил 5 тематик сказки на основе информации о ребёнке. "
+        "Выберите вариант или нажмите «Ещё варианты».",
+    )
+    await message.answer(
+        format_theme_options(options),
+        reply_markup=theme_options_keyboard(options),
+        parse_mode=None,
     )
 
 
@@ -169,8 +208,80 @@ async def start(message: Message, state: FSMContext) -> None:
 @router.message(BookFlow.waiting_child_info, F.text)
 async def collect_child_info(message: Message, state: FSMContext) -> None:
     await state.update_data(child_info=message.text)
+    await message.answer(
+        "Отлично. Сейчас предложу 5 вариантов тематики сказки на основе этой информации."
+    )
+    try:
+        options = await asyncio.wait_for(
+            generate_theme_options(message.text),
+            timeout=THEME_GENERATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate theme options")
+        await message.answer(
+            "Не получилось придумать варианты тематики через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Попробуйте отправить информацию о ребёнке ещё раз."
+        )
+        return
+
+    await state.update_data(
+        theme_options_json=options.model_dump_json(),
+        theme_excluded_titles=[option.title for option in options.options],
+    )
+    await state.set_state(BookFlow.choosing_theme)
+    await send_theme_options(message, options.options)
+
+
+@router.callback_query(BookFlow.choosing_theme, F.data == "theme:more")
+async def more_theme_options(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    child_info = data["child_info"]
+    excluded_titles = data.get("theme_excluded_titles", [])
+    await callback.message.answer("Придумываю ещё 5 вариантов тематики...")
+    await callback.answer()
+    try:
+        options = await asyncio.wait_for(
+            generate_theme_options(child_info, excluded_titles),
+            timeout=THEME_GENERATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate more theme options")
+        await callback.message.answer(
+            "Не получилось придумать ещё варианты.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    await state.update_data(
+        theme_options_json=options.model_dump_json(),
+        theme_excluded_titles=excluded_titles + [option.title for option in options.options],
+    )
+    await send_theme_options(callback.message, options.options)
+
+
+@router.callback_query(BookFlow.choosing_theme, F.data.startswith("theme:select:"))
+async def select_theme(callback: CallbackQuery, state: FSMContext) -> None:
+    selected_number = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    options = StoryThemeOptions.model_validate_json(data["theme_options_json"])
+    selected = next((option for option in options.options if option.number == selected_number), None)
+    if selected is None:
+        await callback.answer("Вариант не найден. Нажмите «Ещё варианты» или выберите другой.", show_alert=True)
+        return
+
+    await state.update_data(selected_theme=selected_theme_text(selected))
     await state.set_state(BookFlow.waiting_photo)
-    await message.answer("Отлично. Теперь загрузите фотографию ребёнка.")
+    await callback.message.answer(
+        f"Выбрана тематика:\n\n{theme_to_text(selected)}\n\nТеперь загрузите фотографию ребёнка.",
+        parse_mode=None,
+    )
+    await callback.answer()
+
+
+@router.message(BookFlow.choosing_theme)
+async def choose_theme_fallback(message: Message) -> None:
+    await message.answer("Выберите тематику кнопкой под списком или нажмите «Ещё варианты».")
 
 
 @router.message(BookFlow.waiting_photo, F.photo)
@@ -209,11 +320,12 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     child_info = data["child_info"]
     character_prompt = data["character_prompt"]
+    selected_theme = data["selected_theme"]
 
     await message.answer("Генерирую сказку и разбиваю её по страницам. Это может занять немного времени.")
     try:
         story = await asyncio.wait_for(
-            generate_story(child_info, character_prompt, pages_count),
+            generate_story(child_info, character_prompt, selected_theme, pages_count),
             timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -292,6 +404,7 @@ async def apply_story_revision(message: Message, state: FSMContext, revision_tex
             revise_story(
                 data["child_info"],
                 data["character_prompt"],
+                data["selected_theme"],
                 story,
                 revision_text,
             ),
@@ -316,6 +429,7 @@ async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
     story = StoryDraft.model_validate_json(data["story_json"])
     child_info = data["child_info"]
     character_prompt = data["character_prompt"]
+    selected_theme = data["selected_theme"]
 
     await callback.message.answer(
         "Отлично. Создаю Scene Blueprint и финальные промпты для каждой страницы..."
@@ -323,7 +437,7 @@ async def approve_story(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     try:
         generated = await asyncio.wait_for(
-            generate_book(child_info, character_prompt, story),
+            generate_book(child_info, character_prompt, selected_theme, story),
             timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
         )
     except Exception as exc:

@@ -1,6 +1,16 @@
 from pydantic import BaseModel, Field, field_validator
 
 
+class StoryThemeOption(BaseModel):
+    number: int
+    title: str = Field(min_length=3)
+    summary: list[str] = Field(min_length=3, max_length=3)
+
+
+class StoryThemeOptions(BaseModel):
+    options: list[StoryThemeOption] = Field(min_length=5, max_length=5)
+
+
 class GeneratedPage(BaseModel):
     page_number: int
     page_text: str = Field(min_length=100)

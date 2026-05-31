@@ -35,11 +35,53 @@ def final_prompt(character_prompt: str, scene_blueprint: str, page_number: int) 
     )
 
 
-def story_generation_prompt(child_info: str, character_prompt: str, pages_count: int) -> str:
+def theme_options_prompt(child_info: str, excluded_titles: list[str] | None = None) -> str:
+    excluded = "\n".join(f"- {title}" for title in excluded_titles or [])
+    excluded_block = f"\nНе повторяй эти уже предложенные варианты:\n{excluded}\n" if excluded else ""
+    return f"""Предложи 5 разных тематик для персонализированной детской сказки.
+
+Информация о ребёнке и пожелания заказчика:
+{child_info}
+
+Опирайся на возраст, интересы, мечты, страхи, любимые игрушки, семью,
+город, персонажей, мультфильмы и любые дополнительные пожелания.
+Тематики должны быть добрыми, визуальными, подходящими для детской книги,
+и достаточно разными между собой.
+{excluded_block}
+Для каждого варианта дай:
+- короткое название тематики;
+- ровно 3 тезисных предложения о том, о чём будет сказка.
+
+Верни только JSON без markdown. Формат:
+{{
+  "options": [
+    {{
+      "number": 1,
+      "title": "Название тематики",
+      "summary": [
+        "Первое предложение.",
+        "Второе предложение.",
+        "Третье предложение."
+      ]
+    }}
+  ]
+}}
+"""
+
+
+def story_generation_prompt(
+    child_info: str,
+    character_prompt: str,
+    selected_theme: str,
+    pages_count: int,
+) -> str:
     return f"""Создай персонализированную детскую сказку.
 
 Информация о ребёнке в свободной форме:
 {child_info}
+
+Выбранная тематика сказки:
+{selected_theme}
 
 Постоянное описание внешности персонажа:
 {character_prompt}
@@ -77,6 +119,7 @@ def story_generation_prompt(child_info: str, character_prompt: str, pages_count:
 def story_revision_prompt(
     child_info: str,
     character_prompt: str,
+    selected_theme: str,
     current_story_json: str,
     revision_request: str,
 ) -> str:
@@ -87,6 +130,9 @@ def story_revision_prompt(
 
 Постоянное описание внешности персонажа:
 {character_prompt}
+
+Выбранная тематика сказки:
+{selected_theme}
 
 Текущая сказка JSON:
 {current_story_json}
@@ -110,7 +156,12 @@ def story_revision_prompt(
 """
 
 
-def scene_blueprints_prompt(child_info: str, character_prompt: str, story_json: str) -> str:
+def scene_blueprints_prompt(
+    child_info: str,
+    character_prompt: str,
+    selected_theme: str,
+    story_json: str,
+) -> str:
     return f"""Создай Scene Blueprint для каждой страницы утверждённой детской сказки.
 
 Информация о ребёнке:
@@ -118,6 +169,9 @@ def scene_blueprints_prompt(child_info: str, character_prompt: str, story_json: 
 
 Постоянное описание внешности персонажа:
 {character_prompt}
+
+Выбранная тематика сказки:
+{selected_theme}
 
 Утверждённая сказка JSON:
 {story_json}
