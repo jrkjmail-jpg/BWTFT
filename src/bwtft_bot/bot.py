@@ -1,3 +1,6 @@
+import asyncio
+from dataclasses import dataclass, field
+
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
@@ -21,6 +24,74 @@ class BookFlow(StatesGroup):
 
 
 router = Router()
+ALBUM_WAIT_SECONDS = 1.5
+
+
+@dataclass
+class PhotoAlbumBuffer:
+    messages: list[Message] = field(default_factory=list)
+    task: asyncio.Task[None] | None = None
+
+
+photo_album_buffers: dict[str, PhotoAlbumBuffer] = {}
+
+
+async def download_message_photo(message: Message, bot: Bot) -> tuple[bytes, str] | None:
+    if not message.photo:
+        return None
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    buffer = await bot.download_file(file.file_path)
+    if buffer is None:
+        return None
+    return buffer.read(), "image/jpeg"
+
+
+async def finish_character_prompt(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    photo_messages: list[Message],
+) -> None:
+    current_state = await state.get_state()
+    if current_state != BookFlow.waiting_photo.state:
+        return
+
+    photos = []
+    for photo_message in photo_messages:
+        downloaded = await download_message_photo(photo_message, bot)
+        if downloaded is not None:
+            photos.append(downloaded)
+
+    if not photos:
+        await message.answer("Не удалось скачать фото. Попробуйте отправить их ещё раз.")
+        return
+
+    await message.answer(
+        f"Получил фото: {len(photos)}. Создаю одно постоянное описание внешности персонажа..."
+    )
+    character_prompt = await create_character_prompt(photos)
+    await state.update_data(character_prompt=character_prompt)
+    await state.set_state(BookFlow.waiting_pages_count)
+    await message.answer(
+        "Описание персонажа готово. Сколько страниц сделать в книге? "
+        "Введите число от 10 и больше, например 12, 16, 20 или 24."
+    )
+
+
+async def process_album_after_delay(
+    album_key: str,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    try:
+        await asyncio.sleep(ALBUM_WAIT_SECONDS)
+    except asyncio.CancelledError:
+        return
+    album = photo_album_buffers.pop(album_key, None)
+    if album is None or not album.messages:
+        return
+    await finish_character_prompt(album.messages[-1], state, bot, album.messages)
 
 
 @router.message(CommandStart())
@@ -43,20 +114,22 @@ async def collect_child_info(message: Message, state: FSMContext) -> None:
 
 @router.message(BookFlow.waiting_photo, F.photo)
 async def collect_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    await message.answer("Фото получил. Создаю постоянное описание внешности персонажа...")
-    photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    buffer = await bot.download_file(file.file_path)
-    if buffer is None:
-        await message.answer("Не удалось скачать фото. Попробуйте отправить его ещё раз.")
+    if message.media_group_id:
+        album_key = f"{message.chat.id}:{message.media_group_id}"
+        album = photo_album_buffers.setdefault(album_key, PhotoAlbumBuffer())
+        album.messages.append(message)
+        if album.task is not None:
+            album.task.cancel()
+        album.task = asyncio.create_task(process_album_after_delay(album_key, state, bot))
         return
 
-    character_prompt = await create_character_prompt(buffer.read(), "image/jpeg")
-    await state.update_data(character_prompt=character_prompt)
-    await state.set_state(BookFlow.waiting_pages_count)
+    await finish_character_prompt(message, state, bot, [message])
+
+
+@router.message(BookFlow.waiting_photo)
+async def collect_photo_fallback(message: Message) -> None:
     await message.answer(
-        "Описание персонажа готово. Сколько страниц сделать в книге? "
-        "Введите число от 10 и больше, например 12, 16, 20 или 24."
+        "На этом шаге отправьте одну фотографию или альбом из нескольких фотографий ребёнка."
     )
 
 

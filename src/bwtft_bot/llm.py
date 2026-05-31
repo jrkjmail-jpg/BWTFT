@@ -1,5 +1,6 @@
 import base64
 import json
+from collections.abc import Sequence
 
 from openai import AsyncOpenAI
 
@@ -11,8 +12,23 @@ from bwtft_bot.schemas import GeneratedBook
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 
-async def create_character_prompt(photo_bytes: bytes, mime_type: str) -> str:
-    encoded = base64.b64encode(photo_bytes).decode("ascii")
+PhotoInput = tuple[bytes, str]
+
+
+async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
+    image_items = []
+    for photo_bytes, mime_type in photos:
+        encoded = base64.b64encode(photo_bytes).decode("ascii")
+        image_items.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{encoded}",
+                    "detail": "low",
+                },
+            }
+        )
+
     response = await client.chat.completions.create(
         model=settings.openai_vision_model,
         messages=[
@@ -30,18 +46,14 @@ async def create_character_prompt(photo_bytes: bytes, mime_type: str) -> str:
                     {
                         "type": "text",
                         "text": (
-                            "Опиши внешность ребёнка в нескольких предложениях: "
+                            "На фотографиях один и тот же ребёнок или несколько ракурсов. "
+                            "Составь одно постоянное описание внешности персонажа, "
+                            "используя только устойчивые черты, которые видны на фото: "
                             "примерный возраст, форма лица, волосы, глаза, выражение "
                             "лица, телосложение, заметные нейтральные особенности."
                         ),
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime_type};base64,{encoded}",
-                            "detail": "low",
-                        },
-                    },
+                    *image_items,
                 ],
             },
         ],
