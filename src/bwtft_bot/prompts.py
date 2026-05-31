@@ -71,7 +71,6 @@ def theme_options_prompt(child_info: str, excluded_titles: list[str] | None = No
 
 def story_generation_prompt(
     child_info: str,
-    character_prompt: str,
     selected_theme: str,
     pages_count: int,
 ) -> str:
@@ -82,9 +81,6 @@ def story_generation_prompt(
 
 Выбранная тематика сказки:
 {selected_theme}
-
-Постоянное описание внешности персонажа:
-{character_prompt}
 
 Количество страниц: {pages_count}.
 
@@ -118,7 +114,6 @@ def story_generation_prompt(
 
 def story_revision_prompt(
     child_info: str,
-    character_prompt: str,
     selected_theme: str,
     current_story_json: str,
     revision_request: str,
@@ -127,9 +122,6 @@ def story_revision_prompt(
 
 Информация о ребёнке:
 {child_info}
-
-Постоянное описание внешности персонажа:
-{character_prompt}
 
 Выбранная тематика сказки:
 {selected_theme}
@@ -153,6 +145,38 @@ def story_revision_prompt(
     }}
   ]
 }}
+"""
+
+
+def characters_prompt(
+    child_info: str,
+    selected_theme: str,
+    story_json: str,
+) -> str:
+    return f"""Создай общий character/correction prompt для иллюстраций детской книги.
+
+Информация о ребёнке и пожелания заказчика:
+{child_info}
+
+Выбранная тематика сказки:
+{selected_theme}
+
+Утверждённая сказка JSON:
+{story_json}
+
+На фотографиях могут быть разные персонажи и важные объекты сказки:
+ребёнок, члены семьи, животные, игрушки, предметы или другие визуальные референсы.
+Самостоятельно сопоставь фотографии с персонажами и объектами из сказки.
+
+Составь единый постоянный промпт для сохранения внешности персонажей между страницами:
+- перечисли главного героя и второстепенных персонажей;
+- для каждого человека опиши примерный возраст, лицо, волосы, глаза, выражение, телосложение и заметные нейтральные особенности;
+- для животных и игрушек опиши вид, размер, цвет, форму, характерные детали;
+- не идентифицируй личности и не делай чувствительных выводов;
+- если на фото есть лишние или неясные объекты, используй только то, что может быть полезно для сказки.
+
+В конце обязательно добавь:
+Стиль: высокодетализированная 3D-иллюстрация в стиле Pixar, мягкий кинематографичный свет, тёплая пастельная цветовая гамма.
 """
 
 

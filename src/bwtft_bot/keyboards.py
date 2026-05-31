@@ -25,9 +25,17 @@ def story_review_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text="Редактировать"),
-                KeyboardButton(text="Дальше"),
+                KeyboardButton(text="Подтвердить сказку"),
             ]
         ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def photos_done_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Готово, создать промпты")]],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -52,10 +60,7 @@ def pages_keyboard(pages_count: int) -> ReplyKeyboardMarkup:
 
 def page_actions_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="Скопировать промпт")],
-            [KeyboardButton(text="К меню страниц")],
-        ],
+        keyboard=[[KeyboardButton(text="К меню страниц")]],
         resize_keyboard=True,
         is_persistent=True,
     )

@@ -7,7 +7,7 @@ from openai import AsyncOpenAI
 
 from bwtft_bot.config import settings
 from bwtft_bot.prompts import (
-    CHARACTER_STYLE,
+    characters_prompt,
     scene_blueprints_prompt,
     story_generation_prompt,
     story_revision_prompt,
@@ -22,7 +22,12 @@ client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
 PhotoInput = tuple[bytes, str]
 
 
-async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
+async def create_character_prompt(
+    photos: Sequence[PhotoInput],
+    child_info: str,
+    selected_theme: str,
+    story: StoryDraft,
+) -> str:
     image_items = []
     for photo_bytes, mime_type in photos:
         encoded = base64.b64encode(photo_bytes).decode("ascii")
@@ -42,9 +47,10 @@ async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Ты создаёшь нейтральное описание внешности ребёнка для "
-                    "персонажа детской книги. Не идентифицируй личность. "
-                    "Не делай чувствительных выводов. Пиши по-русски."
+                    "Ты создаёшь нейтральный character/correction prompt для "
+                    "персонажей и визуальных референсов детской книги. "
+                    "Не идентифицируй личности. Не делай чувствительных выводов. "
+                    "Пиши по-русски."
                 ),
             },
             {
@@ -52,22 +58,20 @@ async def create_character_prompt(photos: Sequence[PhotoInput]) -> str:
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            "На фотографиях один и тот же ребёнок или несколько ракурсов. "
-                            "Составь одно постоянное описание внешности персонажа, "
-                            "используя только устойчивые черты, которые видны на фото: "
-                            "примерный возраст, форма лица, волосы, глаза, выражение "
-                            "лица, телосложение, заметные нейтральные особенности."
+                        "text": characters_prompt(
+                            child_info,
+                            selected_theme,
+                            json.dumps(story.model_dump(), ensure_ascii=False),
                         ),
                     },
                     *image_items,
                 ],
             },
         ],
-        max_completion_tokens=500,
+        max_completion_tokens=1500,
     )
     description = response.choices[0].message.content or ""
-    return f"{description.strip()}\n\n{CHARACTER_STYLE}"
+    return description.strip()
 
 
 async def generate_theme_options(
@@ -98,7 +102,6 @@ async def generate_theme_options(
 
 async def generate_story(
     child_info: str,
-    character_prompt: str,
     selected_theme: str,
     pages_count: int,
 ) -> StoryDraft:
@@ -117,7 +120,6 @@ async def generate_story(
                 "role": "user",
                 "content": story_generation_prompt(
                     child_info,
-                    character_prompt,
                     selected_theme,
                     pages_count,
                 ),
@@ -135,7 +137,6 @@ async def generate_story(
 
 async def revise_story(
     child_info: str,
-    character_prompt: str,
     selected_theme: str,
     current_story: StoryDraft,
     revision_request: str,
@@ -156,7 +157,6 @@ async def revise_story(
                 "role": "user",
                 "content": story_revision_prompt(
                     child_info,
-                    character_prompt,
                     selected_theme,
                     current_story_json,
                     revision_request,

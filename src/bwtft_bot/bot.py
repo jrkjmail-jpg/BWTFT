@@ -15,6 +15,7 @@ from bwtft_bot.db import async_session, init_db
 from bwtft_bot.keyboards import (
     page_actions_keyboard,
     pages_keyboard,
+    photos_done_keyboard,
     remove_keyboard,
     story_review_keyboard,
     theme_options_keyboard,
@@ -35,10 +36,10 @@ from bwtft_bot.telegram_text import html_escape, split_message
 class BookFlow(StatesGroup):
     waiting_child_info = State()
     choosing_theme = State()
-    waiting_photo = State()
     waiting_pages_count = State()
     reviewing_story = State()
     waiting_story_revision = State()
+    waiting_character_photos = State()
     browsing_pages = State()
 
 
@@ -83,6 +84,23 @@ async def download_voice(message: Message, bot: Bot) -> bytes | None:
     return buffer.read()
 
 
+async def add_photos_to_state(
+    state: FSMContext,
+    bot: Bot,
+    photo_messages: list[Message],
+) -> int:
+    data = await state.get_data()
+    photos: list[tuple[bytes, str]] = data.get("character_photos", [])
+    added = 0
+    for photo_message in photo_messages:
+        downloaded = await download_message_photo(photo_message, bot)
+        if downloaded is not None:
+            photos.append(downloaded)
+            added += 1
+    await state.update_data(character_photos=photos)
+    return added
+
+
 def format_story(story: StoryDraft) -> str:
     return "\n\n".join(
         f"Страница {page.page_number}\n{page.page_text}" for page in story.pages
@@ -121,63 +139,32 @@ async def send_story_review(message: Message, story: StoryDraft) -> None:
         await message.answer(chunk, parse_mode=None)
     await message.answer(
         "Проверьте сказку. Если нужны правки, нажмите «Редактировать». "
-        "Если всё устраивает, нажмите «Дальше», и я создам Scene Blueprint и промпты.",
+        "Если всё устраивает, нажмите «Подтвердить сказку».",
         reply_markup=story_review_keyboard(),
     )
 
 
-async def finish_character_prompt(
+async def collect_character_photos(
     message: Message,
     state: FSMContext,
     bot: Bot,
     photo_messages: list[Message],
 ) -> None:
     current_state = await state.get_state()
-    if current_state != BookFlow.waiting_photo.state:
+    if current_state != BookFlow.waiting_character_photos.state:
         return
 
-    photos = []
-    for photo_message in photo_messages:
-        downloaded = await download_message_photo(photo_message, bot)
-        if downloaded is not None:
-            photos.append(downloaded)
-
-    if not photos:
+    added = await add_photos_to_state(state, bot, photo_messages)
+    if added == 0:
         await message.answer("Не удалось скачать фото. Попробуйте отправить их ещё раз.")
         return
 
+    data = await state.get_data()
+    total = len(data.get("character_photos", []))
     await message.answer(
-        f"Получил фото: {len(photos)}. Создаю одно постоянное описание внешности персонажа..."
-    )
-    try:
-        character_prompt = await asyncio.wait_for(
-            create_character_prompt(photos),
-            timeout=CHARACTER_PROMPT_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        logger.exception("Timed out while creating character prompt")
-        await message.answer(
-            "OpenAI слишком долго не отвечает на описание фото.\n\n"
-            "Чаще всего это из-за имени модели или сетевого доступа на хостинге. "
-            "Проверьте OPENAI_VISION_MODEL. Для проверки лучше временно поставить "
-            "gpt-5.2 или gpt-4.1-mini и отправить фото ещё раз."
-        )
-        return
-    except Exception as exc:
-        logger.exception("Failed to create character prompt")
-        await message.answer(
-            "Не получилось создать описание внешности через OpenAI.\n\n"
-            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
-            "Проверьте OPENAI_API_KEY и точное имя модели в OPENAI_VISION_MODEL, "
-            "затем отправьте фото ещё раз."
-        )
-        return
-
-    await state.update_data(character_prompt=character_prompt)
-    await state.set_state(BookFlow.waiting_pages_count)
-    await message.answer(
-        "Описание персонажа готово. Сколько страниц сделать в книге? "
-        "Введите число от 10 и больше, например 12, 16, 20 или 24."
+        f"Получил фото: {added}. Всего загружено: {total}.\n"
+        "Можно загрузить ещё фотографии персонажей, животных, игрушек или нажать «Готово, создать промпты».",
+        reply_markup=photos_done_keyboard(),
     )
 
 
@@ -193,7 +180,7 @@ async def process_album_after_delay(
     album = photo_album_buffers.pop(album_key, None)
     if album is None or not album.messages:
         return
-    await finish_character_prompt(album.messages[-1], state, bot, album.messages)
+    await collect_character_photos(album.messages[-1], state, bot, album.messages)
 
 
 @router.message(CommandStart())
@@ -277,9 +264,10 @@ async def select_theme(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(selected_theme=selected_theme_text(selected))
-    await state.set_state(BookFlow.waiting_photo)
+    await state.set_state(BookFlow.waiting_pages_count)
     await message.answer(
-        f"Выбрана тематика:\n\n{theme_to_text(selected)}\n\nТеперь загрузите фотографию ребёнка.",
+        f"Выбрана тематика:\n\n{theme_to_text(selected)}\n\n"
+        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
         parse_mode=None,
         reply_markup=remove_keyboard(),
     )
@@ -288,27 +276,6 @@ async def select_theme(message: Message, state: FSMContext) -> None:
 @router.message(BookFlow.choosing_theme)
 async def choose_theme_fallback(message: Message) -> None:
     await message.answer("Выберите тематику кнопкой под списком или нажмите «Ещё варианты».")
-
-
-@router.message(BookFlow.waiting_photo, F.photo)
-async def collect_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    if message.media_group_id:
-        album_key = f"{message.chat.id}:{message.media_group_id}"
-        album = photo_album_buffers.setdefault(album_key, PhotoAlbumBuffer())
-        album.messages.append(message)
-        if album.task is not None:
-            album.task.cancel()
-        album.task = asyncio.create_task(process_album_after_delay(album_key, state, bot))
-        return
-
-    await finish_character_prompt(message, state, bot, [message])
-
-
-@router.message(BookFlow.waiting_photo)
-async def collect_photo_fallback(message: Message) -> None:
-    await message.answer(
-        "На этом шаге отправьте одну фотографию или альбом из нескольких фотографий ребёнка."
-    )
 
 
 @router.message(BookFlow.waiting_pages_count, F.text)
@@ -325,13 +292,12 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     child_info = data["child_info"]
-    character_prompt = data["character_prompt"]
     selected_theme = data["selected_theme"]
 
     await message.answer("Генерирую сказку и разбиваю её по страницам. Это может занять немного времени.")
     try:
         story = await asyncio.wait_for(
-            generate_story(child_info, character_prompt, selected_theme, pages_count),
+            generate_story(child_info, selected_theme, pages_count),
             timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
         )
     except TimeoutError:
@@ -409,7 +375,6 @@ async def apply_story_revision(message: Message, state: FSMContext, revision_tex
         revised = await asyncio.wait_for(
             revise_story(
                 data["child_info"],
-                data["character_prompt"],
                 data["selected_theme"],
                 story,
                 revision_text,
@@ -429,18 +394,75 @@ async def apply_story_revision(message: Message, state: FSMContext, revision_tex
     await send_story_review(message, revised)
 
 
-@router.message(BookFlow.reviewing_story, F.text == "Дальше")
+@router.message(BookFlow.reviewing_story, F.text == "Подтвердить сказку")
 async def approve_story(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookFlow.waiting_character_photos)
+    await state.update_data(character_photos=[])
+    await message.answer(
+        "Сказка подтверждена.\n\n"
+        "Загрузите фотографии персонажей и важных объектов этой сказки: ребёнка, животных, игрушек, "
+        "членов семьи или других референсов. Можно отправить одну фотографию, альбом или несколько сообщений.\n\n"
+        "Когда всё загрузите, нажмите «Готово, создать промпты».",
+        reply_markup=photos_done_keyboard(),
+    )
+
+
+@router.message(BookFlow.reviewing_story)
+async def reviewing_story_fallback(message: Message) -> None:
+    await message.answer("Выберите «Редактировать» или «Подтвердить сказку» кнопкой в меню.")
+
+
+@router.message(BookFlow.waiting_character_photos, F.photo)
+async def collect_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+    if message.media_group_id:
+        album_key = f"{message.chat.id}:{message.media_group_id}"
+        album = photo_album_buffers.setdefault(album_key, PhotoAlbumBuffer())
+        album.messages.append(message)
+        if album.task is not None:
+            album.task.cancel()
+        album.task = asyncio.create_task(process_album_after_delay(album_key, state, bot))
+        return
+
+    await collect_character_photos(message, state, bot, [message])
+
+
+@router.message(BookFlow.waiting_character_photos, F.text == "Готово, создать промпты")
+async def finish_photos_and_create_prompts(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    photos = data.get("character_photos", [])
+    if not photos:
+        await message.answer("Сначала загрузите хотя бы одну фотографию персонажа или важного объекта.")
+        return
+
     story = StoryDraft.model_validate_json(data["story_json"])
     child_info = data["child_info"]
-    character_prompt = data["character_prompt"]
     selected_theme = data["selected_theme"]
 
     await message.answer(
-        "Отлично. Создаю Scene Blueprint и финальные промпты для каждой страницы...",
+        "Создаю общий character/correction prompt по фотографиям персонажей...",
         reply_markup=remove_keyboard(),
     )
+    try:
+        character_prompt = await asyncio.wait_for(
+            create_character_prompt(photos, child_info, selected_theme, story),
+            timeout=CHARACTER_PROMPT_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.exception("Timed out while creating character prompt")
+        await message.answer(
+            "OpenAI слишком долго не отвечает на анализ фотографий.\n\n"
+            "Проверьте OPENAI_VISION_MODEL или попробуйте загрузить меньше фотографий."
+        )
+        return
+    except Exception as exc:
+        logger.exception("Failed to create character prompt")
+        await message.answer(
+            "Не получилось создать character/correction prompt через OpenAI.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    await message.answer("Создаю Scene Blueprint и финальные промпты для каждой страницы...")
     try:
         generated = await asyncio.wait_for(
             generate_book(child_info, character_prompt, selected_theme, story),
@@ -451,7 +473,7 @@ async def approve_story(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Не получилось создать Scene Blueprint и промпты через OpenAI.\n\n"
             f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
-            "Нажмите «Дальше» ещё раз или попробуйте уменьшить количество страниц."
+            "Нажмите «Готово, создать промпты» ещё раз или попробуйте уменьшить количество страниц."
         )
         return
 
@@ -464,16 +486,23 @@ async def approve_story(message: Message, state: FSMContext) -> None:
         )
 
     await state.set_state(BookFlow.browsing_pages)
-    await state.update_data(current_book_id=book.id, current_pages_count=book.pages_count)
+    await state.update_data(
+        current_book_id=book.id,
+        current_pages_count=book.pages_count,
+        character_photos=[],
+    )
     await message.answer(
-        f"Книга готова: {book.pages_count} страниц. Выберите страницу:",
+        f"Промпты готовы: {book.pages_count} страниц. Выберите страницу:",
         reply_markup=pages_keyboard(book.pages_count),
     )
 
 
-@router.message(BookFlow.reviewing_story)
-async def reviewing_story_fallback(message: Message) -> None:
-    await message.answer("Выберите «Редактировать» или «Дальше» кнопкой в меню.")
+@router.message(BookFlow.waiting_character_photos)
+async def collect_photo_fallback(message: Message) -> None:
+    await message.answer(
+        "Загрузите фотографии персонажей/объектов или нажмите «Готово, создать промпты».",
+        reply_markup=photos_done_keyboard(),
+    )
 
 
 @router.message(BookFlow.browsing_pages, F.text == "К меню страниц")
@@ -513,7 +542,7 @@ async def show_page(message: Message, state: FSMContext) -> None:
         f"{html_escape(prompt)}"
     )
     if len(text) > 3900:
-        text = text[:3800] + "\n\n...Промпт слишком длинный для одного сообщения. Нажмите «Скопировать промпт»."
+        text = text[:3800] + "\n\n...Промпт слишком длинный для одного сообщения."
     await state.update_data(current_page_number=page_number)
     await message.answer(
         text,
@@ -521,28 +550,9 @@ async def show_page(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(BookFlow.browsing_pages, F.text == "Скопировать промпт")
-async def copy_prompt(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    book_id = data["current_book_id"]
-    page_number = data.get("current_page_number")
-    if not page_number:
-        await message.answer("Сначала выберите страницу.")
-        return
-
-    async with async_session() as session:
-        payload = await get_page_payload(session, book_id, page_number)
-    if not payload:
-        await message.answer("Промпт не найден.")
-        return
-    prompt = payload[2]
-    for chunk in split_message(f"Промпт для страницы {page_number}:\n\n{prompt}"):
-        await message.answer(chunk, parse_mode=None)
-
-
 @router.message(BookFlow.browsing_pages)
 async def browsing_pages_fallback(message: Message) -> None:
-    await message.answer("Выберите страницу или действие кнопкой в меню.")
+    await message.answer("Выберите страницу кнопкой в меню.")
 
 
 @router.message()
