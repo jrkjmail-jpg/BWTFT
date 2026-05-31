@@ -40,12 +40,16 @@ python main.py
 ```bash
 TELEGRAM_BOT_TOKEN=...
 OPENAI_API_KEY=...
-OPENAI_TEXT_MODEL=gpt-4.1
-OPENAI_VISION_MODEL=gpt-4.1
-DATABASE_URL=sqlite+aiosqlite:///./data/bwtft.sqlite3
+OPENAI_TEXT_MODEL=gpt-5.2
+OPENAI_VISION_MODEL=gpt-5.2
+DATABASE_URL=sqlite+aiosqlite:////app/data/bwtft.sqlite3
 ```
 
 3. Если хостинг сам устанавливает зависимости, он может использовать `requirements.txt`.
+
+В BotHost базу лучше хранить в `/app/data`, чтобы она сохранялась между обновлениями из Git.
+Если в вашем OpenAI-кабинете доступно другое точное API-имя самой новой модели,
+достаточно заменить `OPENAI_TEXT_MODEL` и `OPENAI_VISION_MODEL` в переменных окружения.
 
 ## Сценарий
 
