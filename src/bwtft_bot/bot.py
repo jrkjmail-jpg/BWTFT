@@ -532,12 +532,10 @@ async def show_page(message: Message, state: FSMContext) -> None:
         await message.answer("Страница не найдена.")
         return
 
-    page_text, scene_blueprint, prompt = payload
+    page_text, _scene_blueprint, prompt = payload
     text = (
         f"<b>Текст страницы {page_number}</b>\n\n"
         f"{html_escape(page_text)}\n\n"
-        f"<b>Scene Blueprint</b>\n\n"
-        f"{html_escape(scene_blueprint)}\n\n"
         f"<b>Финальный промпт</b>\n\n"
         f"{html_escape(prompt)}"
     )
