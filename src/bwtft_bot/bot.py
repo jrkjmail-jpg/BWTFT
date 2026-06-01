@@ -328,7 +328,8 @@ async def request_story_revision(message: Message, state: FSMContext) -> None:
     await state.set_state(BookFlow.waiting_story_revision)
     await message.answer(
         "Напишите правки к сказке текстом или отправьте голосовое сообщение. "
-        "Например: «сделай финал смешнее» или «добавь больше динозавров».",
+        "Можно просить любые изменения: сильно сократить, переписать сюжет, убрать персонажа, "
+        "изменить финал, сделать проще или полностью поменять настроение.",
         reply_markup=remove_keyboard(),
     )
 
@@ -391,6 +392,9 @@ async def apply_story_revision(message: Message, state: FSMContext, revision_tex
         return
     await state.update_data(story_json=revised.model_dump_json())
     await state.set_state(BookFlow.reviewing_story)
+    await message.answer(
+        "Готово. Я буду анализировать персонажей и делать промпты уже по этой последней версии сказки."
+    )
     await send_story_review(message, revised)
 
 

@@ -150,7 +150,8 @@ async def revise_story(
                 "role": "system",
                 "content": (
                     "Ты профессиональный редактор детских книг. "
-                    "Строго соблюдай JSON-схему и сохраняй количество страниц."
+                    "Пожелания автора имеют высший приоритет: можно сильно сокращать, "
+                    "переписывать сюжет и менять структуру. Строго соблюдай JSON-схему."
                 ),
             },
             {
@@ -167,8 +168,6 @@ async def revise_story(
     )
     raw = response.choices[0].message.content or "{}"
     revised = StoryDraft.model_validate(json.loads(raw))
-    if len(revised.pages) != len(current_story.pages):
-        raise ValueError(f"Expected {len(current_story.pages)} pages, got {len(revised.pages)}")
     return revised
 
 
