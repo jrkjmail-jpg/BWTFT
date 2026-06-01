@@ -45,6 +45,7 @@ OPENAI_TEXT_MODEL=gpt-5.2
 OPENAI_VISION_MODEL=gpt-5.2
 OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 DATABASE_URL=sqlite+aiosqlite:////app/data/bwtft.sqlite3
+ADMIN_USER_IDS=123456789,987654321
 ```
 
 3. Если хостинг сам устанавливает зависимости, он может использовать `requirements.txt`.
@@ -52,6 +53,11 @@ DATABASE_URL=sqlite+aiosqlite:////app/data/bwtft.sqlite3
 В BotHost базу лучше хранить в `/app/data`, чтобы она сохранялась между обновлениями из Git.
 Если в вашем OpenAI-кабинете доступно другое точное API-имя самой новой модели,
 достаточно заменить `OPENAI_TEXT_MODEL` и `OPENAI_VISION_MODEL` в переменных окружения.
+
+`ADMIN_USER_IDS` — список Telegram user ID через запятую. Если переменная пустая,
+бот доступен всем. Если заполнена, бот отвечает только пользователям из списка.
+Чтобы узнать свой ID, напишите боту [@userinfobot](https://t.me/userinfobot)
+или [@getmyid_bot](https://t.me/getmyid_bot).
 
 ## Сценарий
 

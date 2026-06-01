@@ -1,8 +1,10 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -59,6 +61,28 @@ class PhotoAlbumBuffer:
 
 
 photo_album_buffers: dict[str, PhotoAlbumBuffer] = {}
+
+
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: dict[str, Any],
+    ) -> Any:
+        allowed_user_ids = settings.allowed_user_ids
+        if not allowed_user_ids:
+            return await handler(event, data)
+        if event.from_user and event.from_user.id in allowed_user_ids:
+            return await handler(event, data)
+
+        logger.info(
+            "Blocked unauthorized user id=%s username=%s",
+            event.from_user.id if event.from_user else None,
+            event.from_user.username if event.from_user else None,
+        )
+        await event.answer("Доступ к этому боту ограничен. Обратитесь к администратору.")
+        return None
 
 
 async def download_message_photo(message: Message, bot: Bot) -> tuple[bytes, str] | None:
@@ -565,6 +589,7 @@ async def fallback(message: Message) -> None:
 async def create_dispatcher() -> Dispatcher:
     await init_db()
     dp = Dispatcher()
+    dp.message.middleware(AccessMiddleware())
     dp.include_router(router)
     return dp
 
