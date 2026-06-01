@@ -6,10 +6,10 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
@@ -71,6 +71,9 @@ class AccessMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
+        if event.text and event.text.startswith("/id"):
+            return await handler(event, data)
+
         allowed_user_ids = settings.allowed_user_ids
         if not allowed_user_ids:
             return await handler(event, data)
@@ -216,6 +219,46 @@ async def start(message: Message, state: FSMContext) -> None:
         "Привет! Отправьте одним сообщением всё, что хотите учесть о ребёнке: "
         "имя, возраст, город, семью, любимые игрушки, интересы, мечты, страхи "
         "и любые пожелания к сказке.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(Command("new"))
+async def new_book(message: Message, state: FSMContext) -> None:
+    await start(message, state)
+
+
+@router.message(Command("help"))
+async def help_command(message: Message) -> None:
+    await message.answer(
+        "Команды бота:\n\n"
+        "/start — начать новую книгу\n"
+        "/new — начать заново\n"
+        "/cancel — сбросить текущий сценарий\n"
+        "/id — показать ваш Telegram user ID\n"
+        "/help — показать эту подсказку\n\n"
+        "Сценарий: описание ребёнка → выбор темы → количество страниц → сказка → редактура → "
+        "подтверждение → фото персонажей → промпты страниц.",
+    )
+
+
+@router.message(Command("id"))
+async def id_command(message: Message) -> None:
+    if not message.from_user:
+        await message.answer("Не удалось определить Telegram user ID.")
+        return
+
+    await message.answer(
+        f"Ваш Telegram user ID: <code>{message.from_user.id}</code>\n\n"
+        "Этот ID можно добавить в ADMIN_USER_IDS для доступа к боту."
+    )
+
+
+@router.message(Command("cancel"))
+async def cancel_command(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "Текущий сценарий сброшен. Чтобы начать новую книгу, нажмите /start.",
         reply_markup=remove_keyboard(),
     )
 
@@ -631,6 +674,15 @@ async def run_bot() -> None:
     bot = Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Начать новую книгу"),
+            BotCommand(command="new", description="Начать заново"),
+            BotCommand(command="help", description="Помощь и сценарий работы"),
+            BotCommand(command="id", description="Показать ваш Telegram user ID"),
+            BotCommand(command="cancel", description="Сбросить текущий сценарий"),
+        ]
     )
     dp = await create_dispatcher()
     await dp.start_polling(bot)
