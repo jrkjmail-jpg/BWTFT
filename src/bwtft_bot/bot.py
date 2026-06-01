@@ -231,6 +231,8 @@ async def new_book(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("help"))
 @router.message(F.text.startswith("/help"))
+@router.message(Command("commands"))
+@router.message(F.text.startswith("/commands"))
 async def help_command(message: Message) -> None:
     await message.answer(
         "Команды бота:\n\n"
@@ -238,6 +240,7 @@ async def help_command(message: Message) -> None:
         "/new — начать заново\n"
         "/cancel — сбросить текущий сценарий\n"
         "/id — показать ваш Telegram user ID\n"
+        "/commands — показать список всех команд\n"
         "/help — показать эту подсказку\n\n"
         "Сценарий: описание ребёнка → выбор темы → количество страниц → сказка → редактура → "
         "подтверждение → фото персонажей → промпты страниц.",
@@ -684,6 +687,7 @@ async def run_bot() -> None:
             BotCommand(command="start", description="Начать новую книгу"),
             BotCommand(command="new", description="Начать заново"),
             BotCommand(command="help", description="Помощь и сценарий работы"),
+            BotCommand(command="commands", description="Показать все команды"),
             BotCommand(command="id", description="Показать ваш Telegram user ID"),
             BotCommand(command="cancel", description="Сбросить текущий сценарий"),
         ]
