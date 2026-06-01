@@ -38,6 +38,7 @@ from bwtft_bot.telegram_text import html_escape, split_message
 class BookFlow(StatesGroup):
     waiting_child_info = State()
     choosing_theme = State()
+    waiting_custom_theme = State()
     waiting_pages_count = State()
     reviewing_story = State()
     waiting_story_revision = State()
@@ -297,9 +298,40 @@ async def select_theme(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(BookFlow.choosing_theme, F.text == "Своя тема")
+async def request_custom_theme(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookFlow.waiting_custom_theme)
+    await message.answer(
+        "Напишите свою тему сказки в свободной форме. Можно коротко или подробно: "
+        "жанр, герои, настроение, конфликт, финал, важные пожелания.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.waiting_custom_theme, F.text)
+async def collect_custom_theme(message: Message, state: FSMContext) -> None:
+    custom_theme = message.text.strip()
+    if len(custom_theme) < 3:
+        await message.answer("Опишите тему чуть подробнее.")
+        return
+
+    await state.update_data(selected_theme=f"Своя тема заказчика:\n{custom_theme}")
+    await state.set_state(BookFlow.waiting_pages_count)
+    await message.answer(
+        f"Принял свою тему:\n\n{custom_theme}\n\n"
+        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
+        parse_mode=None,
+    )
+
+
+@router.message(BookFlow.waiting_custom_theme)
+async def custom_theme_fallback(message: Message) -> None:
+    await message.answer("Отправьте свою тему сказки обычным текстом.")
+
+
 @router.message(BookFlow.choosing_theme)
 async def choose_theme_fallback(message: Message) -> None:
-    await message.answer("Выберите тематику кнопкой под списком или нажмите «Ещё варианты».")
+    await message.answer("Выберите тематику кнопкой в меню, нажмите «Своя тема» или «Ещё варианты».")
 
 
 @router.message(BookFlow.waiting_pages_count, F.text)

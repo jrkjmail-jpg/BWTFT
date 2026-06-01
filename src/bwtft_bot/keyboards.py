@@ -12,6 +12,7 @@ def theme_options_keyboard(options: list[StoryThemeOption]) -> ReplyKeyboardMark
         [KeyboardButton(text=f"Выбрать {option.number}")]
         for option in options
     ]
+    rows.append([KeyboardButton(text="Своя тема")])
     rows.append([KeyboardButton(text="Ещё варианты")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
