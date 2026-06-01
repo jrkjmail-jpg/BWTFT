@@ -224,11 +224,13 @@ async def start(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("new"))
+@router.message(F.text.startswith("/new"))
 async def new_book(message: Message, state: FSMContext) -> None:
     await start(message, state)
 
 
 @router.message(Command("help"))
+@router.message(F.text.startswith("/help"))
 async def help_command(message: Message) -> None:
     await message.answer(
         "Команды бота:\n\n"
@@ -243,6 +245,7 @@ async def help_command(message: Message) -> None:
 
 
 @router.message(Command("id"))
+@router.message(F.text.startswith("/id"))
 async def id_command(message: Message) -> None:
     if not message.from_user:
         await message.answer("Не удалось определить Telegram user ID.")
@@ -255,6 +258,7 @@ async def id_command(message: Message) -> None:
 
 
 @router.message(Command("cancel"))
+@router.message(F.text.startswith("/cancel"))
 async def cancel_command(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
