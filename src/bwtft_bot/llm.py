@@ -8,12 +8,13 @@ from openai import AsyncOpenAI
 from bwtft_bot.config import settings
 from bwtft_bot.prompts import (
     characters_prompt,
+    custom_theme_prompt,
     scene_blueprints_prompt,
     story_generation_prompt,
     story_revision_prompt,
     theme_options_prompt,
 )
-from bwtft_bot.schemas import GeneratedBook, StoryDraft, StoryThemeOptions
+from bwtft_bot.schemas import GeneratedBook, StoryDraft, StoryThemeOption, StoryThemeOptions
 
 
 client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
@@ -98,6 +99,29 @@ async def generate_theme_options(
     )
     raw = response.choices[0].message.content or "{}"
     return StoryThemeOptions.model_validate(json.loads(raw))
+
+
+async def generate_custom_theme(child_info: str, user_request: str) -> StoryThemeOption:
+    response = await client.with_options(timeout=120.0).chat.completions.create(
+        model=settings.openai_text_model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты креативный редактор детских книг. Создай одну тему, "
+                    "строго следуя пожеланиям пользователя."
+                ),
+            },
+            {
+                "role": "user",
+                "content": custom_theme_prompt(child_info, user_request),
+            },
+        ],
+        max_completion_tokens=1200,
+    )
+    raw = response.choices[0].message.content or "{}"
+    return StoryThemeOption.model_validate(json.loads(raw))
 
 
 async def generate_story(

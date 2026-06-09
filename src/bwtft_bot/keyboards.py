@@ -12,8 +12,8 @@ def theme_options_keyboard(options: list[StoryThemeOption]) -> ReplyKeyboardMark
         [KeyboardButton(text=f"Выбрать {option.number}")]
         for option in options
     ]
-    rows.append([KeyboardButton(text="Своя тема")])
-    rows.append([KeyboardButton(text="Ещё варианты")])
+    rows.append([KeyboardButton(text="Редактировать тему")])
+    rows.append([KeyboardButton(text="Предложить ещё")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
