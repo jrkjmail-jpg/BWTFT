@@ -15,6 +15,7 @@ from aiogram.client.default import DefaultBotProperties
 from bwtft_bot.config import settings
 from bwtft_bot.db import async_session, init_db
 from bwtft_bot.keyboards import (
+    custom_theme_review_keyboard,
     page_actions_keyboard,
     pages_keyboard,
     photos_done_keyboard,
@@ -40,6 +41,7 @@ class BookFlow(StatesGroup):
     waiting_child_info = State()
     choosing_theme = State()
     waiting_custom_theme = State()
+    reviewing_custom_theme = State()
     waiting_pages_count = State()
     reviewing_story = State()
     waiting_story_revision = State()
@@ -353,6 +355,7 @@ async def select_theme(message: Message, state: FSMContext) -> None:
 @router.message(BookFlow.choosing_theme, F.text == "Редактировать тему")
 @router.message(BookFlow.choosing_theme, F.text == "Своя тема")
 async def request_custom_theme(message: Message, state: FSMContext) -> None:
+    await state.update_data(custom_theme_draft=None)
     await state.set_state(BookFlow.waiting_custom_theme)
     await message.answer(
         "Опишите тему сказки текстом или голосовым сообщением: какие нужны персонажи, "
@@ -396,6 +399,13 @@ async def collect_custom_theme_voice(message: Message, state: FSMContext, bot: B
 
 async def build_custom_theme(message: Message, state: FSMContext, user_request: str) -> None:
     data = await state.get_data()
+    current_draft = data.get("custom_theme_draft")
+    if current_draft:
+        user_request = (
+            f"Текущий черновик темы:\n{current_draft}\n\n"
+            f"Новые пожелания пользователя:\n{user_request}\n\n"
+            "Переработай текущий черновик с учётом новых пожеланий."
+        )
     await message.answer("Собираю одну тематику на основе ваших пожеланий...")
     try:
         theme = await asyncio.wait_for(
@@ -411,18 +421,64 @@ async def build_custom_theme(message: Message, state: FSMContext, user_request: 
         )
         return
 
-    await state.update_data(selected_theme=selected_theme_text(theme))
-    await state.set_state(BookFlow.waiting_pages_count)
+    theme_text = selected_theme_text(theme)
+    await state.update_data(
+        selected_theme=theme_text,
+        custom_theme_draft=theme_text,
+        custom_theme_json=theme.model_dump_json(),
+    )
+    await state.set_state(BookFlow.reviewing_custom_theme)
     await message.answer(
-        f"Готовая тема:\n\n{theme_to_text(theme)}\n\n"
-        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
+        f"Черновик темы:\n\n{theme_to_text(theme)}\n\n"
+        "Подтвердите тему, отредактируйте её ещё раз или начните выбор заново.",
         parse_mode=None,
+        reply_markup=custom_theme_review_keyboard(),
     )
 
 
 @router.message(BookFlow.waiting_custom_theme)
 async def custom_theme_fallback(message: Message) -> None:
     await message.answer("Отправьте пожелания к теме текстом или голосовым сообщением.")
+
+
+@router.message(BookFlow.reviewing_custom_theme, F.text == "Подтвердить тему")
+async def approve_custom_theme(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookFlow.waiting_pages_count)
+    await message.answer(
+        "Тема подтверждена.\n\n"
+        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.reviewing_custom_theme, F.text == "Редактировать ещё")
+async def edit_custom_theme_again(message: Message, state: FSMContext) -> None:
+    await state.set_state(BookFlow.waiting_custom_theme)
+    await message.answer(
+        "Отправьте новые правки к теме текстом или голосовым сообщением. "
+        "AI сохранит текущий черновик и переработает его по вашим пожеланиям.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.reviewing_custom_theme, F.text == "Начать выбор заново")
+async def restart_theme_choice(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    options = StoryThemeOptions.model_validate_json(data["theme_options_json"])
+    await state.update_data(
+        selected_theme=None,
+        custom_theme_draft=None,
+        custom_theme_json=None,
+    )
+    await state.set_state(BookFlow.choosing_theme)
+    await send_theme_options(message, options.options)
+
+
+@router.message(BookFlow.reviewing_custom_theme)
+async def reviewing_custom_theme_fallback(message: Message) -> None:
+    await message.answer(
+        "Выберите в меню: «Подтвердить тему», «Редактировать ещё» или «Начать выбор заново»."
+    )
 
 
 @router.message(BookFlow.choosing_theme)

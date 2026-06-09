@@ -21,6 +21,18 @@ def theme_options_keyboard(options: list[StoryThemeOption]) -> ReplyKeyboardMark
     )
 
 
+def custom_theme_review_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Подтвердить тему")],
+            [KeyboardButton(text="Редактировать ещё")],
+            [KeyboardButton(text="Начать выбор заново")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
 def story_review_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
