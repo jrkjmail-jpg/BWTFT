@@ -9,12 +9,20 @@ from bwtft_bot.config import settings
 from bwtft_bot.prompts import (
     characters_prompt,
     custom_theme_prompt,
+    final_prompt_revision_prompt,
+    scene_options_prompt,
     scene_blueprints_prompt,
     story_generation_prompt,
     story_revision_prompt,
     theme_options_prompt,
 )
-from bwtft_bot.schemas import GeneratedBook, StoryDraft, StoryThemeOption, StoryThemeOptions
+from bwtft_bot.schemas import (
+    GeneratedBook,
+    SceneOptions,
+    StoryDraft,
+    StoryThemeOption,
+    StoryThemeOptions,
+)
 
 
 client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0)
@@ -193,6 +201,53 @@ async def revise_story(
     raw = response.choices[0].message.content or "{}"
     revised = StoryDraft.model_validate(json.loads(raw))
     return revised
+
+
+async def generate_scene_options(page_text: str, current_scene: str) -> SceneOptions:
+    response = await client.with_options(timeout=120.0).chat.completions.create(
+        model=settings.openai_text_model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты режиссёр иллюстрированной детской книги. "
+                    "Каждый вариант должен быть одним ясным кадром, а не монтажом событий."
+                ),
+            },
+            {
+                "role": "user",
+                "content": scene_options_prompt(page_text, current_scene),
+            },
+        ],
+        max_completion_tokens=2500,
+    )
+    raw = response.choices[0].message.content or "{}"
+    return SceneOptions.model_validate(json.loads(raw))
+
+
+async def revise_final_prompt(current_prompt: str, revision_request: str) -> str:
+    response = await client.with_options(timeout=120.0).chat.completions.create(
+        model=settings.openai_text_model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты редактор промптов для книжных иллюстраций. "
+                    "Верни только один короткий готовый промпт."
+                ),
+            },
+            {
+                "role": "user",
+                "content": final_prompt_revision_prompt(current_prompt, revision_request),
+            },
+        ],
+        max_completion_tokens=1800,
+    )
+    prompt = (response.choices[0].message.content or "").strip().strip('"')
+    if len(prompt) > 2800:
+        prompt = prompt[:2800].rsplit(". ", 1)[0].strip() + "."
+    return prompt
 
 
 async def generate_book(

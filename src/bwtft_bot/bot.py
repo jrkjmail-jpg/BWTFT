@@ -20,6 +20,7 @@ from bwtft_bot.keyboards import (
     pages_keyboard,
     photos_done_keyboard,
     remove_keyboard,
+    scene_options_keyboard,
     story_review_keyboard,
     theme_options_keyboard,
 )
@@ -27,13 +28,21 @@ from bwtft_bot.llm import (
     create_character_prompt,
     generate_book,
     generate_custom_theme,
+    generate_scene_options,
     generate_story,
     generate_theme_options,
+    revise_final_prompt,
     revise_story,
     transcribe_voice,
 )
-from bwtft_bot.repository import get_page_payload, save_book
-from bwtft_bot.schemas import StoryDraft, StoryThemeOption, StoryThemeOptions
+from bwtft_bot.prompts import final_prompt
+from bwtft_bot.repository import (
+    get_page_payload,
+    save_book,
+    update_final_prompt,
+    update_page_scene,
+)
+from bwtft_bot.schemas import SceneOptions, StoryDraft, StoryThemeOption, StoryThemeOptions
 from bwtft_bot.telegram_text import split_message
 
 
@@ -47,6 +56,8 @@ class BookFlow(StatesGroup):
     waiting_story_revision = State()
     waiting_character_photos = State()
     browsing_pages = State()
+    choosing_page_scene = State()
+    waiting_prompt_revision = State()
 
 
 router = Router()
@@ -173,6 +184,20 @@ async def send_story_review(message: Message, story: StoryDraft) -> None:
         "Если всё устраивает, нажмите «Подтвердить сказку».",
         reply_markup=story_review_keyboard(),
     )
+
+
+async def send_page_prompt(
+    message: Message,
+    page_number: int,
+    prompt: str,
+) -> None:
+    chunks = split_message(f"Промпт страницы {page_number}:\n\n{prompt}", limit=3900)
+    for index, chunk in enumerate(chunks):
+        await message.answer(
+            chunk,
+            parse_mode=None,
+            reply_markup=page_actions_keyboard() if index == len(chunks) - 1 else None,
+        )
 
 
 async def collect_character_photos(
@@ -748,13 +773,190 @@ async def show_page(message: Message, state: FSMContext) -> None:
 
     _page_text, _scene_blueprint, prompt = payload
     await state.update_data(current_page_number=page_number)
-    chunks = split_message(f"Промпт страницы {page_number}:\n\n{prompt}", limit=3900)
-    for index, chunk in enumerate(chunks):
-        await message.answer(
-            chunk,
-            parse_mode=None,
-            reply_markup=page_actions_keyboard() if index == len(chunks) - 1 else None,
+    await send_page_prompt(message, page_number, prompt)
+
+
+@router.message(BookFlow.browsing_pages, F.text == "Варианты сцены")
+async def request_scene_options(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    page_number = data.get("current_page_number")
+    if not page_number:
+        await message.answer("Сначала выберите страницу.")
+        return
+
+    async with async_session() as session:
+        payload = await get_page_payload(session, data["current_book_id"], page_number)
+    if not payload:
+        await message.answer("Страница не найдена.")
+        return
+
+    page_text, current_scene, _prompt = payload
+    await message.answer(
+        "Анализирую страницу и выбираю три разных одиночных момента для иллюстрации...",
+        reply_markup=remove_keyboard(),
+    )
+    try:
+        options = await asyncio.wait_for(
+            generate_scene_options(page_text, current_scene),
+            timeout=THEME_GENERATION_TIMEOUT_SECONDS,
         )
+    except Exception as exc:
+        logger.exception("Failed to generate scene options")
+        await message.answer(
+            "Не получилось создать варианты сцены.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    await state.update_data(scene_options_json=options.model_dump_json())
+    await state.set_state(BookFlow.choosing_page_scene)
+    text = "\n\n".join(
+        f"{option.number}. {option.title}\n{option.scene_description}"
+        for option in options.options
+    )
+    await message.answer(
+        f"Выберите один момент для иллюстрации:\n\n{text}",
+        parse_mode=None,
+        reply_markup=scene_options_keyboard(options.options),
+    )
+
+
+@router.message(BookFlow.choosing_page_scene, F.text.startswith("Выбрать сцену "))
+async def select_page_scene(message: Message, state: FSMContext) -> None:
+    try:
+        selected_number = int(message.text.removeprefix("Выбрать сцену ").strip())
+    except ValueError:
+        await message.answer("Выберите сцену кнопкой в меню.")
+        return
+
+    data = await state.get_data()
+    options = SceneOptions.model_validate_json(data["scene_options_json"])
+    selected = next(
+        (option for option in options.options if option.number == selected_number),
+        None,
+    )
+    if selected is None:
+        await message.answer("Вариант сцены не найден.")
+        return
+
+    page_number = data["current_page_number"]
+    prompt = final_prompt("", selected.scene_description, page_number)
+    async with async_session() as session:
+        await update_page_scene(
+            session,
+            data["current_book_id"],
+            page_number,
+            selected.scene_description,
+            prompt,
+        )
+
+    await state.set_state(BookFlow.browsing_pages)
+    await state.update_data(scene_options_json=None)
+    await message.answer(f"Выбрана сцена: {selected.title}")
+    await send_page_prompt(message, page_number, prompt)
+
+
+@router.message(BookFlow.choosing_page_scene, F.text == "Назад к промпту")
+async def return_to_page_prompt(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    page_number = data["current_page_number"]
+    async with async_session() as session:
+        payload = await get_page_payload(session, data["current_book_id"], page_number)
+    if not payload:
+        await message.answer("Страница не найдена.")
+        return
+    await state.set_state(BookFlow.browsing_pages)
+    await send_page_prompt(message, page_number, payload[2])
+
+
+@router.message(BookFlow.choosing_page_scene)
+async def choosing_page_scene_fallback(message: Message) -> None:
+    await message.answer("Выберите вариант сцены или нажмите «Назад к промпту».")
+
+
+@router.message(BookFlow.browsing_pages, F.text == "Редактировать промпт")
+async def request_prompt_revision(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("current_page_number"):
+        await message.answer("Сначала выберите страницу.")
+        return
+    await state.set_state(BookFlow.waiting_prompt_revision)
+    await message.answer(
+        "Опишите правки к иллюстрации текстом или голосовым сообщением. "
+        "Можно изменить действие, персонажей, детали, окружение, композицию или стиль.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.waiting_prompt_revision, F.text)
+async def collect_prompt_revision_text(message: Message, state: FSMContext) -> None:
+    await apply_prompt_revision(message, state, message.text)
+
+
+@router.message(BookFlow.waiting_prompt_revision, F.voice)
+async def collect_prompt_revision_voice(message: Message, state: FSMContext, bot: Bot) -> None:
+    voice_bytes = await download_voice(message, bot)
+    if voice_bytes is None:
+        await message.answer("Не удалось скачать голосовое сообщение. Попробуйте ещё раз.")
+        return
+    await message.answer("Расшифровываю правки к промпту...")
+    try:
+        revision_text = await asyncio.wait_for(
+            transcribe_voice(voice_bytes),
+            timeout=VOICE_TRANSCRIPTION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to transcribe prompt revision")
+        await message.answer(
+            "Не получилось распознать голосовое сообщение.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+    await message.answer(f"Понял правки:\n\n{revision_text}")
+    await apply_prompt_revision(message, state, revision_text)
+
+
+async def apply_prompt_revision(
+    message: Message,
+    state: FSMContext,
+    revision_text: str,
+) -> None:
+    data = await state.get_data()
+    page_number = data["current_page_number"]
+    async with async_session() as session:
+        payload = await get_page_payload(session, data["current_book_id"], page_number)
+    if not payload:
+        await message.answer("Страница не найдена.")
+        return
+
+    await message.answer("Редактирую финальный промпт...")
+    try:
+        revised_prompt = await asyncio.wait_for(
+            revise_final_prompt(payload[2], revision_text),
+            timeout=THEME_GENERATION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to revise final prompt")
+        await message.answer(
+            "Не получилось отредактировать промпт.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    async with async_session() as session:
+        await update_final_prompt(
+            session,
+            data["current_book_id"],
+            page_number,
+            revised_prompt,
+        )
+    await state.set_state(BookFlow.browsing_pages)
+    await send_page_prompt(message, page_number, revised_prompt)
+
+
+@router.message(BookFlow.waiting_prompt_revision)
+async def prompt_revision_fallback(message: Message) -> None:
+    await message.answer("Отправьте правки к промпту текстом или голосовым сообщением.")
 
 
 @router.message(BookFlow.browsing_pages)

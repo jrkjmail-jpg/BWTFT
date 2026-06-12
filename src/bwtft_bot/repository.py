@@ -87,5 +87,49 @@ async def get_page_payload(session: AsyncSession, book_id: int, page_number: int
     return page.page_text, blueprint.scene_description, prompt.final_prompt
 
 
+async def update_page_scene(
+    session: AsyncSession,
+    book_id: int,
+    page_number: int,
+    scene_description: str,
+    final_prompt_text: str,
+) -> None:
+    blueprint = await session.scalar(
+        select(SceneBlueprint).where(
+            SceneBlueprint.book_id == book_id,
+            SceneBlueprint.page_number == page_number,
+        )
+    )
+    prompt = await session.scalar(
+        select(FinalPrompt).where(
+            FinalPrompt.book_id == book_id,
+            FinalPrompt.page_number == page_number,
+        )
+    )
+    if not blueprint or not prompt:
+        raise ValueError("Page prompt not found")
+    blueprint.scene_description = scene_description
+    prompt.final_prompt = final_prompt_text
+    await session.commit()
+
+
+async def update_final_prompt(
+    session: AsyncSession,
+    book_id: int,
+    page_number: int,
+    final_prompt_text: str,
+) -> None:
+    prompt = await session.scalar(
+        select(FinalPrompt).where(
+            FinalPrompt.book_id == book_id,
+            FinalPrompt.page_number == page_number,
+        )
+    )
+    if not prompt:
+        raise ValueError("Final prompt not found")
+    prompt.final_prompt = final_prompt_text
+    await session.commit()
+
+
 async def get_book(session: AsyncSession, book_id: int) -> Book | None:
     return await session.get(Book, book_id)

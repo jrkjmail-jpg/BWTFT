@@ -1,6 +1,6 @@
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
-from bwtft_bot.schemas import StoryThemeOption
+from bwtft_bot.schemas import SceneOption, StoryThemeOption
 
 
 def remove_keyboard() -> ReplyKeyboardRemove:
@@ -73,7 +73,24 @@ def pages_keyboard(pages_count: int) -> ReplyKeyboardMarkup:
 
 def page_actions_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="К меню страниц")]],
+        keyboard=[
+            [KeyboardButton(text="Варианты сцены")],
+            [KeyboardButton(text="Редактировать промпт")],
+            [KeyboardButton(text="К меню страниц")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def scene_options_keyboard(options: list[SceneOption]) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=f"Выбрать сцену {option.number}")]
+        for option in options
+    ]
+    rows.append([KeyboardButton(text="Назад к промпту")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
     )

@@ -11,6 +11,16 @@ class StoryThemeOptions(BaseModel):
     options: list[StoryThemeOption] = Field(min_length=5, max_length=5)
 
 
+class SceneOption(BaseModel):
+    number: int
+    title: str = Field(min_length=3)
+    scene_description: str = Field(min_length=50, max_length=1400)
+
+
+class SceneOptions(BaseModel):
+    options: list[SceneOption] = Field(min_length=3, max_length=3)
+
+
 class GeneratedPage(BaseModel):
     page_number: int
     page_text: str = Field(min_length=100)
