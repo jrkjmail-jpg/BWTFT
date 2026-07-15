@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, Message
+from aiogram.types import BotCommand, BufferedInputFile, Message
 from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
@@ -37,6 +37,7 @@ from bwtft_bot.llm import (
     split_custom_story,
     transcribe_voice,
 )
+from bwtft_bot.nvidia_images import NvidiaImageError, generate_image
 from bwtft_bot.prompts import final_prompt
 from bwtft_bot.repository import (
     get_page_payload,
@@ -69,6 +70,7 @@ CHARACTER_PROMPT_TIMEOUT_SECONDS = 45
 BOOK_GENERATION_TIMEOUT_SECONDS = 240
 THEME_GENERATION_TIMEOUT_SECONDS = 120
 VOICE_TRANSCRIPTION_TIMEOUT_SECONDS = 150
+IMAGE_GENERATION_TIMEOUT_SECONDS = 210
 logger = logging.getLogger(__name__)
 
 
@@ -989,6 +991,61 @@ async def return_to_page_prompt(message: Message, state: FSMContext) -> None:
 @router.message(BookFlow.choosing_page_scene)
 async def choosing_page_scene_fallback(message: Message) -> None:
     await message.answer("Выберите вариант сцены или нажмите «Назад к промпту».")
+
+
+@router.message(BookFlow.browsing_pages, F.text == "Создать иллюстрацию")
+async def create_page_illustration(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    page_number = data.get("current_page_number")
+    if not page_number:
+        await message.answer("Сначала выберите страницу.")
+        return
+
+    async with async_session() as session:
+        payload = await get_page_payload(session, data["current_book_id"], page_number)
+    if not payload:
+        await message.answer("Страница не найдена.")
+        return
+
+    _page_text, _scene_blueprint, prompt = payload
+    await message.answer("Создаю иллюстрацию через NVIDIA Flux.1-Dev. Это может занять немного времени...")
+    try:
+        image_bytes = await asyncio.wait_for(
+            generate_image(prompt),
+            timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
+        )
+    except NvidiaImageError as exc:
+        logger.exception("NVIDIA image generation failed")
+        if "NVIDIA_API_KEY" in str(exc):
+            await message.answer(
+                "NVIDIA API ещё не настроен.\n\n"
+                "Добавьте переменную NVIDIA_API_KEY в окружение BotHost и перезапустите бота."
+            )
+        else:
+            await message.answer(
+                "Не получилось создать иллюстрацию через NVIDIA.\n\n"
+                f"Техническая ошибка: {exc}"
+            )
+        return
+    except TimeoutError:
+        logger.exception("Timed out while generating NVIDIA image")
+        await message.answer(
+            "NVIDIA слишком долго создаёт иллюстрацию. Попробуйте нажать «Создать иллюстрацию» ещё раз."
+        )
+        return
+    except Exception as exc:
+        logger.exception("Unexpected image generation error")
+        await message.answer(
+            "Не получилось создать иллюстрацию.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    await message.answer_photo(
+        BufferedInputFile(image_bytes, filename=f"page_{page_number}_illustration.png"),
+        caption=f"Иллюстрация страницы {page_number}",
+        reply_markup=page_actions_keyboard(),
+    )
 
 
 @router.message(BookFlow.browsing_pages, F.text == "Редактировать промпт")

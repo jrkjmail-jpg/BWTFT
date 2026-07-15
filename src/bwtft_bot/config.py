@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     database_url: str = "sqlite+aiosqlite:///./data/bwtft.sqlite3"
     admin_user_ids: str = ""
+    nvidia_api_key: str = ""
+    nvidia_image_endpoint: str = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+    nvidia_image_model: str = "black-forest-labs/flux.1-dev"
+    nvidia_image_width: int = 1024
+    nvidia_image_height: int = 1024
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

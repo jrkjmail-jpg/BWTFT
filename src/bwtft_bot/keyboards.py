@@ -75,6 +75,7 @@ def pages_keyboard(pages_count: int) -> ReplyKeyboardMarkup:
 def page_actions_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="Создать иллюстрацию")],
             [KeyboardButton(text="Варианты сцены")],
             [KeyboardButton(text="Редактировать промпт")],
             [KeyboardButton(text="К меню страниц")],
