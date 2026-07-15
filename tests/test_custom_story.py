@@ -48,3 +48,28 @@ def test_prescribed_inline_page_headers_are_split_without_rewriting():
     assert story is not None
     assert story.pages[0].page_text == "Аня нашла ракушку."
     assert story.pages[1].page_text == "Ракушка тихо засияла."
+
+
+def test_prescribed_numbered_pages_are_split_without_rewriting():
+    text = """1. Аня открыла окно.
+2. В комнату влетел тёплый свет."""
+
+    story = parse_prescribed_pages(text)
+
+    assert story is not None
+    assert story.pages[0].page_text == "Аня открыла окно."
+    assert story.pages[1].page_text == "В комнату влетел тёплый свет."
+
+
+def test_prescribed_number_sign_pages_are_split_without_rewriting():
+    text = """№1
+Аня держит книгу.
+
+№2
+На странице светятся котята."""
+
+    story = parse_prescribed_pages(text)
+
+    assert story is not None
+    assert story.pages[0].page_text == "Аня держит книгу."
+    assert story.pages[1].page_text == "На странице светятся котята."

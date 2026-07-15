@@ -4,7 +4,19 @@ from bwtft_bot.schemas import StoryDraft, StoryDraftPage
 
 
 PAGE_HEADER_RE = re.compile(
-    r"(?im)^\s*(?:страница|page)\s*(?:№|#)?\s*(\d+)\s*[:.\-–—]?\s*(.*)$"
+    r"""(?imx)
+    ^\s*
+    (?:
+        (?:страница|page)\s*(?:№|\#)?\s*(\d+)
+        |
+        (?:№|\#)\s*(\d+)
+        |
+        (\d+)\s*(?:страница|page)
+        |
+        (\d+)[.)]
+    )
+    \s*[:.\-–—]?\s*(.*)$
+    """
 )
 
 
@@ -24,11 +36,11 @@ def parse_prescribed_pages(text: str) -> StoryDraft | None:
 
     pages: list[StoryDraftPage] = []
     for index, match in enumerate(matches):
-        marker_number = int(match.group(1))
+        marker_number = int(next(group for group in match.groups()[:4] if group))
         next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        inline_text = match.group(2)
+        inline_text = match.group(5)
         if inline_text:
-            page_start = match.start(2)
+            page_start = match.start(5)
         else:
             page_start = match.end()
         page_text = _clean_page_text(text[page_start:next_start])

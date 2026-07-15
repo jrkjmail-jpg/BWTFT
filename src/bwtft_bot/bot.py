@@ -415,8 +415,9 @@ async def collect_own_story_text(message: Message, state: FSMContext) -> None:
         )
         await state.set_state(BookFlow.reviewing_story)
         await message.answer(
-            "Вижу, что в тексте уже прописаны страницы. "
-            "Оставляю текст как есть и просто разделяю его по этим страницам."
+            f"Вижу, что в тексте уже прописаны страницы: {len(prescribed_story.pages)}. "
+            "Количество страниц определил автоматически. "
+            "Оставляю текст как есть и дальше готовлю его к промптам."
         )
         await send_story_review(message, prescribed_story)
         return
