@@ -13,6 +13,7 @@ from aiogram.types import BotCommand, Message
 from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
+from bwtft_bot.custom_story import parse_prescribed_pages
 from bwtft_bot.db import async_session, init_db
 from bwtft_bot.keyboards import (
     custom_theme_review_keyboard,
@@ -402,6 +403,21 @@ async def collect_own_story_text(message: Message, state: FSMContext) -> None:
         await message.answer("Пришлите текст сказки чуть подробнее.")
         return
 
+    prescribed_story = parse_prescribed_pages(own_story_text)
+    if prescribed_story is not None:
+        await state.update_data(
+            own_story_text=own_story_text,
+            selected_theme="Свой текст пользователя с готовой разбивкой по страницам.",
+            story_json=prescribed_story.model_dump_json(),
+        )
+        await state.set_state(BookFlow.reviewing_story)
+        await message.answer(
+            "Вижу, что в тексте уже прописаны страницы. "
+            "Оставляю текст как есть и просто разделяю его по этим страницам."
+        )
+        await send_story_review(message, prescribed_story)
+        return
+
     await state.update_data(
         own_story_text=own_story_text,
         selected_theme="Свой текст пользователя. Использовать как готовую основу сказки.",
@@ -611,10 +627,17 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     own_story_text = data.get("own_story_text")
 
     if own_story_text:
-        progress_text = (
-            "Разбиваю ваш текст на страницы без переписывания. "
-            "Это может занять немного времени."
-        )
+        prescribed_story = parse_prescribed_pages(own_story_text)
+        if prescribed_story is not None:
+            await state.update_data(story_json=prescribed_story.model_dump_json())
+            await state.set_state(BookFlow.reviewing_story)
+            await message.answer(
+                "В тексте уже есть готовая разбивка по страницам. "
+                "Оставляю её без переразметки."
+            )
+            await send_story_review(message, prescribed_story)
+            return
+        progress_text = "Разбиваю ваш текст на страницы без переписывания. Это может занять немного времени."
     else:
         progress_text = "Генерирую сказку и разбиваю её по страницам. Это может занять немного времени."
     await message.answer(progress_text)
