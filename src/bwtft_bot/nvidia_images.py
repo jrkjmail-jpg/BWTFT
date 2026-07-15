@@ -28,6 +28,15 @@ def _reference_prompt(prompt: str) -> str:
     )
 
 
+def _is_reference_image_unsupported(status_code: int, response_text: str) -> bool:
+    normalized = response_text.lower()
+    return (
+        status_code == 422
+        and "example_id" in normalized
+        and "base64" in normalized
+    )
+
+
 def _build_payload(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> tuple[str, dict[str, Any]]:
     if reference_images:
         image_bytes, mime_type = reference_images[0]
@@ -45,6 +54,48 @@ def _build_payload(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> 
         "height": settings.nvidia_image_height,
         "samples": 1,
     }
+
+
+async def _post_generation_request(endpoint: str, payload: dict[str, Any]) -> httpx.Response:
+    headers = {
+        "Authorization": f"Bearer {settings.nvidia_api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        return await client.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+        )
+
+
+async def _extract_image_bytes(response: httpx.Response) -> bytes:
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("image/"):
+        return response.content
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise NvidiaImageError("NVIDIA API did not return JSON or image bytes") from exc
+
+    image_bytes = _find_image_bytes(data)
+    if image_bytes is not None:
+        return image_bytes
+
+    image_url = _find_image_url(data)
+    if image_url is not None:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            image_response = await client.get(image_url)
+        if image_response.status_code >= 400:
+            raise NvidiaImageError(
+                f"NVIDIA image URL returned {image_response.status_code}: {image_response.text[:500]}"
+            )
+        return image_response.content
+
+    raise NvidiaImageError("NVIDIA API response does not contain image bytes")
 
 
 def _decode_data_url(value: str) -> bytes | None:
@@ -106,52 +157,26 @@ def _find_image_url(value: Any) -> str | None:
     return None
 
 
-async def generate_image(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> bytes:
+async def generate_image(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> tuple[bytes, bool]:
     if not settings.nvidia_api_key:
         raise NvidiaImageError("NVIDIA_API_KEY is not configured")
 
+    references = reference_images[: settings.nvidia_reference_images_max]
     endpoint, payload = _build_payload(
         prompt,
-        reference_images[: settings.nvidia_reference_images_max],
+        references,
     )
-
-    headers = {
-        "Authorization": f"Bearer {settings.nvidia_api_key}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        response = await client.post(
-            endpoint,
-            headers=headers,
-            json=payload,
-        )
+    response = await _post_generation_request(endpoint, payload)
 
     if response.status_code >= 400:
+        if references and _is_reference_image_unsupported(response.status_code, response.text):
+            fallback_endpoint, fallback_payload = _build_payload(prompt)
+            fallback_response = await _post_generation_request(fallback_endpoint, fallback_payload)
+            if fallback_response.status_code >= 400:
+                raise NvidiaImageError(
+                    f"NVIDIA API returned {fallback_response.status_code}: {fallback_response.text[:500]}"
+                )
+            return await _extract_image_bytes(fallback_response), True
         raise NvidiaImageError(f"NVIDIA API returned {response.status_code}: {response.text[:500]}")
 
-    content_type = response.headers.get("content-type", "")
-    if content_type.startswith("image/"):
-        return response.content
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise NvidiaImageError("NVIDIA API did not return JSON or image bytes") from exc
-
-    image_bytes = _find_image_bytes(data)
-    if image_bytes is not None:
-        return image_bytes
-
-    image_url = _find_image_url(data)
-    if image_url is not None:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            image_response = await client.get(image_url)
-        if image_response.status_code >= 400:
-            raise NvidiaImageError(
-                f"NVIDIA image URL returned {image_response.status_code}: {image_response.text[:500]}"
-            )
-        return image_response.content
-
-    raise NvidiaImageError("NVIDIA API response does not contain image bytes")
+    return await _extract_image_bytes(response), False

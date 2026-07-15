@@ -1,7 +1,12 @@
 import base64
 
 from bwtft_bot.keyboards import page_actions_keyboard
-from bwtft_bot.nvidia_images import _build_payload, _find_image_bytes, _find_image_url
+from bwtft_bot.nvidia_images import (
+    _build_payload,
+    _find_image_bytes,
+    _find_image_url,
+    _is_reference_image_unsupported,
+)
 
 
 def test_nvidia_image_parser_accepts_artifact_base64():
@@ -48,3 +53,10 @@ def test_nvidia_payload_with_reference_uses_kontext_image_endpoint():
     assert payload["aspect_ratio"] == "1:1"
     assert "width" not in payload
     assert "height" not in payload
+
+
+def test_nvidia_reference_base64_rejection_is_detected():
+    response_text = '{"detail":"Expected: example_id, got: base64"}'
+
+    assert _is_reference_image_unsupported(422, response_text)
+    assert not _is_reference_image_unsupported(400, response_text)

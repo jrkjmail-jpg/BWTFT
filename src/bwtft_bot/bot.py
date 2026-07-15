@@ -1020,7 +1020,7 @@ async def create_page_illustration(message: Message, state: FSMContext) -> None:
         status = "Создаю иллюстрацию через NVIDIA Flux. Это может занять немного времени..."
     await message.answer(status)
     try:
-        image_bytes = await asyncio.wait_for(
+        image_bytes, reference_fallback_used = await asyncio.wait_for(
             generate_image(prompt, reference_photos),
             timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
         )
@@ -1056,6 +1056,13 @@ async def create_page_illustration(message: Message, state: FSMContext) -> None:
         caption=f"Иллюстрация страницы {page_number}",
         reply_markup=page_actions_keyboard(),
     )
+    if reference_fallback_used:
+        await message.answer(
+            "NVIDIA preview API не принял загруженное фото как референс "
+            "(этот endpoint ждёт только встроенный example_id), поэтому я автоматически "
+            "создал иллюстрацию по текстовому промпту без загрузки картинки.",
+            reply_markup=page_actions_keyboard(),
+        )
 
 
 @router.message(BookFlow.browsing_pages, F.text == "Редактировать промпт")
