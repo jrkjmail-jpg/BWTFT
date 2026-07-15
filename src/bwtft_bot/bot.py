@@ -40,6 +40,7 @@ from bwtft_bot.llm import (
 from bwtft_bot.nvidia_images import NvidiaImageError, generate_image
 from bwtft_bot.prompts import final_prompt
 from bwtft_bot.repository import (
+    get_book_reference_photos,
     get_page_payload,
     save_book,
     update_final_prompt,
@@ -841,6 +842,7 @@ async def finish_photos_and_create_prompts(message: Message, state: FSMContext) 
             user_id=message.from_user.id,
             generated=generated,
             character_prompt_text=character_prompt,
+            reference_photos=photos,
         )
 
     await state.set_state(BookFlow.browsing_pages)
@@ -1003,15 +1005,23 @@ async def create_page_illustration(message: Message, state: FSMContext) -> None:
 
     async with async_session() as session:
         payload = await get_page_payload(session, data["current_book_id"], page_number)
+        reference_photos = await get_book_reference_photos(session, data["current_book_id"])
     if not payload:
         await message.answer("Страница не найдена.")
         return
 
     _page_text, _scene_blueprint, prompt = payload
-    await message.answer("Создаю иллюстрацию через NVIDIA Flux.1-Dev. Это может занять немного времени...")
+    if reference_photos:
+        status = (
+            "Создаю иллюстрацию через NVIDIA Flux с загруженной референс-картинкой персонажа. "
+            "Это может занять немного времени..."
+        )
+    else:
+        status = "Создаю иллюстрацию через NVIDIA Flux. Это может занять немного времени..."
+    await message.answer(status)
     try:
         image_bytes = await asyncio.wait_for(
-            generate_image(prompt),
+            generate_image(prompt, reference_photos),
             timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
         )
     except NvidiaImageError as exc:

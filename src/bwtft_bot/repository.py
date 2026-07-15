@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bwtft_bot.models import (
     Book,
+    BookReferenceImage,
     CharacterPrompt,
     FinalPrompt,
     SceneBlueprint,
@@ -18,6 +19,7 @@ async def save_book(
     user_id: int,
     generated: GeneratedBook,
     character_prompt_text: str,
+    reference_photos: list[tuple[bytes, str]] | None = None,
 ) -> Book:
     book = Book(
         user_id=user_id,
@@ -30,6 +32,16 @@ async def save_book(
 
     session.add(CharacterPrompt(book_id=book.id, character_prompt=character_prompt_text))
     session.add(StyleTemplate(book_id=book.id, style_template=STYLE_TEMPLATE))
+
+    for index, (image_bytes, mime_type) in enumerate(reference_photos or [], start=1):
+        session.add(
+            BookReferenceImage(
+                book_id=book.id,
+                order_index=index,
+                mime_type=mime_type,
+                image_bytes=image_bytes,
+            )
+        )
 
     for page in generated.pages:
         session.add(
@@ -85,6 +97,17 @@ async def get_page_payload(session: AsyncSession, book_id: int, page_number: int
     if not page or not blueprint or not prompt:
         return None
     return page.page_text, blueprint.scene_description, prompt.final_prompt
+
+
+async def get_book_reference_photos(session: AsyncSession, book_id: int) -> list[tuple[bytes, str]]:
+    rows = (
+        await session.scalars(
+            select(BookReferenceImage)
+            .where(BookReferenceImage.book_id == book_id)
+            .order_by(BookReferenceImage.order_index)
+        )
+    ).all()
+    return [(row.image_bytes, row.mime_type) for row in rows]
 
 
 async def update_page_scene(

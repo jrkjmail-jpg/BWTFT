@@ -49,7 +49,10 @@ DATABASE_URL=sqlite+aiosqlite:////app/data/bwtft.sqlite3
 ADMIN_USER_IDS=123456789,987654321
 NVIDIA_API_KEY=...
 NVIDIA_IMAGE_ENDPOINT=https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev
+NVIDIA_REFERENCE_IMAGE_ENDPOINT=https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev
 NVIDIA_IMAGE_MODEL=black-forest-labs/flux.1-dev
+NVIDIA_REFERENCE_IMAGE_MODEL=black-forest-labs/flux.1-kontext-dev
+NVIDIA_REFERENCE_IMAGES_MAX=1
 NVIDIA_IMAGE_WIDTH=1024
 NVIDIA_IMAGE_HEIGHT=1024
 ```
@@ -76,15 +79,24 @@ NVIDIA_IMAGE_HEIGHT=1024
 ```bash
 NVIDIA_API_KEY=nvapi-ваш_ключ
 NVIDIA_IMAGE_ENDPOINT=https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev
+NVIDIA_REFERENCE_IMAGE_ENDPOINT=https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev
 NVIDIA_IMAGE_MODEL=black-forest-labs/flux.1-dev
+NVIDIA_REFERENCE_IMAGE_MODEL=black-forest-labs/flux.1-kontext-dev
+NVIDIA_REFERENCE_IMAGES_MAX=1
 NVIDIA_IMAGE_WIDTH=1024
 NVIDIA_IMAGE_HEIGHT=1024
 ```
 
 6. Сохраните переменные и перезапустите бота на BotHost.
 
-Если в карточке модели NVIDIA указан другой endpoint, замените только
-`NVIDIA_IMAGE_ENDPOINT`. Код бота берёт адрес из окружения.
+Обычный `flux.1-dev` используется для генерации по тексту. Для генерации с фото-референсом
+бот использует `flux.1-kontext-dev`, потому что именно этот endpoint принимает поле `image`.
+Сейчас NVIDIA API принимает один референс в поле `image`, поэтому бот отправляет первый
+загруженный референс. Все загруженные фото сохраняются в базе вместе с книгой.
+
+Если в карточке модели NVIDIA указан другой endpoint, замените соответствующую переменную:
+`NVIDIA_IMAGE_ENDPOINT` для текстовой генерации или `NVIDIA_REFERENCE_IMAGE_ENDPOINT`
+для генерации с фото-референсом. Код бота берёт адреса из окружения.
 Если `NVIDIA_API_KEY` не задан, кнопка «Создать иллюстрацию» покажет подсказку,
 что API нужно добавить в окружение.
 

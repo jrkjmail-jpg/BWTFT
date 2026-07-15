@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bwtft_bot.db import Base
@@ -21,6 +21,7 @@ class Book(Base):
     character_prompt: Mapped["CharacterPrompt"] = relationship(cascade="all, delete-orphan")
     style_template: Mapped["StyleTemplate"] = relationship(cascade="all, delete-orphan")
     final_prompts: Mapped[list["FinalPrompt"]] = relationship(cascade="all, delete-orphan")
+    reference_images: Mapped[list["BookReferenceImage"]] = relationship(cascade="all, delete-orphan")
 
 
 class StoryPage(Base):
@@ -67,3 +68,13 @@ class FinalPrompt(Base):
     book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), index=True)
     page_number: Mapped[int] = mapped_column(Integer)
     final_prompt: Mapped[str] = mapped_column(Text)
+
+
+class BookReferenceImage(Base):
+    __tablename__ = "book_reference_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), index=True)
+    order_index: Mapped[int] = mapped_column(Integer)
+    mime_type: Mapped[str] = mapped_column(String(100))
+    image_bytes: Mapped[bytes] = mapped_column(LargeBinary)

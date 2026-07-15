@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -8,6 +9,44 @@ from bwtft_bot.config import settings
 
 class NvidiaImageError(RuntimeError):
     pass
+
+
+PhotoInput = tuple[bytes, str]
+
+
+def _image_data_url(image_bytes: bytes, mime_type: str) -> str:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _reference_prompt(prompt: str) -> str:
+    return (
+        f"{prompt}\n\n"
+        "Use the input image only as a visual reference for the characters and important objects. "
+        "Preserve recognizable appearance, colors, proportions, and characteristic details from the reference, "
+        "but create the new illustrated scene described above."
+    )
+
+
+def _build_payload(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> tuple[str, dict[str, Any]]:
+    if reference_images:
+        image_bytes, mime_type = reference_images[0]
+        return settings.nvidia_reference_image_endpoint, {
+            "prompt": _reference_prompt(prompt),
+            "image": _image_data_url(image_bytes, mime_type),
+            "width": settings.nvidia_image_width,
+            "height": settings.nvidia_image_height,
+            "aspect_ratio": "1:1",
+            "samples": 1,
+        }
+
+    return settings.nvidia_image_endpoint, {
+        "prompt": prompt,
+        "mode": "base",
+        "width": settings.nvidia_image_width,
+        "height": settings.nvidia_image_height,
+        "samples": 1,
+    }
 
 
 def _decode_data_url(value: str) -> bytes | None:
@@ -69,16 +108,14 @@ def _find_image_url(value: Any) -> str | None:
     return None
 
 
-async def generate_image(prompt: str) -> bytes:
+async def generate_image(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> bytes:
     if not settings.nvidia_api_key:
         raise NvidiaImageError("NVIDIA_API_KEY is not configured")
 
-    payload: dict[str, Any] = {
-        "prompt": prompt,
-        "mode": "base",
-        "width": settings.nvidia_image_width,
-        "height": settings.nvidia_image_height,
-    }
+    endpoint, payload = _build_payload(
+        prompt,
+        reference_images[: settings.nvidia_reference_images_max],
+    )
 
     headers = {
         "Authorization": f"Bearer {settings.nvidia_api_key}",
@@ -88,7 +125,7 @@ async def generate_image(prompt: str) -> bytes:
 
     async with httpx.AsyncClient(timeout=180.0) as client:
         response = await client.post(
-            settings.nvidia_image_endpoint,
+            endpoint,
             headers=headers,
             json=payload,
         )

@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     admin_user_ids: str = ""
     nvidia_api_key: str = ""
     nvidia_image_endpoint: str = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+    nvidia_reference_image_endpoint: str = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev"
     nvidia_image_model: str = "black-forest-labs/flux.1-dev"
+    nvidia_reference_image_model: str = "black-forest-labs/flux.1-kontext-dev"
+    nvidia_reference_images_max: int = 1
     nvidia_image_width: int = 1024
     nvidia_image_height: int = 1024
 
