@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 from bwtft_bot.config import settings
 from bwtft_bot.prompts import (
     characters_prompt,
+    custom_story_split_prompt,
     custom_theme_prompt,
     final_prompt_revision_prompt,
     scene_options_prompt,
@@ -165,6 +166,41 @@ async def generate_story(
     if len(generated.pages) != pages_count:
         raise ValueError(f"Expected {pages_count} pages, got {len(generated.pages)}")
     return generated
+
+
+async def split_custom_story(
+    child_info: str,
+    own_story_text: str,
+    pages_count: int,
+) -> StoryDraft:
+    response = await client.with_options(timeout=180.0).chat.completions.create(
+        model=settings.openai_text_model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты редактор-верстальщик детской книги. "
+                    "Твоя задача — только делить авторский текст на страницы, "
+                    "не переписывая его и не добавляя сюжет."
+                ),
+            },
+            {
+                "role": "user",
+                "content": custom_story_split_prompt(
+                    child_info,
+                    own_story_text,
+                    pages_count,
+                ),
+            },
+        ],
+        max_completion_tokens=8000,
+    )
+    raw = response.choices[0].message.content or "{}"
+    story = StoryDraft.model_validate(json.loads(raw))
+    if len(story.pages) != pages_count:
+        raise ValueError(f"Expected {pages_count} pages, got {len(story.pages)}")
+    return story
 
 
 async def revise_story(

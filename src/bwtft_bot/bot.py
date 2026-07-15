@@ -33,6 +33,7 @@ from bwtft_bot.llm import (
     generate_theme_options,
     revise_final_prompt,
     revise_story,
+    split_custom_story,
     transcribe_voice,
 )
 from bwtft_bot.prompts import final_prompt
@@ -49,6 +50,7 @@ from bwtft_bot.telegram_text import split_message
 class BookFlow(StatesGroup):
     waiting_child_info = State()
     choosing_theme = State()
+    waiting_own_story = State()
     waiting_custom_theme = State()
     reviewing_custom_theme = State()
     waiting_pages_count = State()
@@ -165,7 +167,7 @@ def selected_theme_text(option: StoryThemeOption) -> str:
 async def send_theme_options(message: Message, options: list[StoryThemeOption]) -> None:
     await message.answer(
         "Я предложил 5 тематик сказки на основе информации о ребёнке. "
-        "Выберите вариант, нажмите «Предложить ещё» или «Редактировать тему».",
+        "Выберите вариант, нажмите «Свой вариант», «Предложить ещё» или «Редактировать тему».",
     )
     await message.answer(
         format_theme_options(options),
@@ -367,7 +369,10 @@ async def select_theme(message: Message, state: FSMContext) -> None:
         await message.answer("Вариант не найден. Нажмите «Предложить ещё» или выберите другой.")
         return
 
-    await state.update_data(selected_theme=selected_theme_text(selected))
+    await state.update_data(
+        selected_theme=selected_theme_text(selected),
+        own_story_text=None,
+    )
     await state.set_state(BookFlow.waiting_pages_count)
     await message.answer(
         f"Выбрана тематика:\n\n{theme_to_text(selected)}\n\n"
@@ -375,6 +380,78 @@ async def select_theme(message: Message, state: FSMContext) -> None:
         parse_mode=None,
         reply_markup=remove_keyboard(),
     )
+
+
+@router.message(BookFlow.choosing_theme, F.text == "Свой вариант")
+async def request_own_story(message: Message, state: FSMContext) -> None:
+    await state.update_data(own_story_text=None)
+    await state.set_state(BookFlow.waiting_own_story)
+    await message.answer(
+        "Отправьте свой вариант сказки текстом или голосовым сообщением.\n\n"
+        "Если отправите текст — я возьму его как готовую основу без переписывания "
+        "и только разобью по страницам.\n"
+        "Если отправите голосовое — я использую его как вводные и построю сказку вокруг них.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.waiting_own_story, F.text)
+async def collect_own_story_text(message: Message, state: FSMContext) -> None:
+    own_story_text = message.text.strip()
+    if len(own_story_text) < 10:
+        await message.answer("Пришлите текст сказки чуть подробнее.")
+        return
+
+    await state.update_data(
+        own_story_text=own_story_text,
+        selected_theme="Свой текст пользователя. Использовать как готовую основу сказки.",
+    )
+    await state.set_state(BookFlow.waiting_pages_count)
+    await message.answer(
+        "Принял ваш текст как готовую основу сказки.\n\n"
+        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.waiting_own_story, F.voice)
+async def collect_own_story_voice(message: Message, state: FSMContext, bot: Bot) -> None:
+    voice_bytes = await download_voice(message, bot)
+    if voice_bytes is None:
+        await message.answer("Не удалось скачать голосовое сообщение. Попробуйте ещё раз.")
+        return
+
+    await message.answer("Расшифровываю ваш вариант сказки...")
+    try:
+        user_request = await asyncio.wait_for(
+            transcribe_voice(voice_bytes),
+            timeout=VOICE_TRANSCRIPTION_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception("Failed to transcribe own story")
+        await message.answer(
+            "Не получилось распознать голосовое сообщение.\n\n"
+            f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
+            "Можно отправить свой вариант обычным текстом."
+        )
+        return
+
+    await state.update_data(
+        own_story_text=None,
+        selected_theme=f"Свой голосовой вариант пользователя:\n{user_request}",
+    )
+    await state.set_state(BookFlow.waiting_pages_count)
+    await message.answer(
+        f"Понял голосовые вводные:\n\n{user_request}\n\n"
+        "Сколько страниц сделать в книге? Введите число от 10 и больше, например 12, 16, 20 или 24.",
+        parse_mode=None,
+        reply_markup=remove_keyboard(),
+    )
+
+
+@router.message(BookFlow.waiting_own_story)
+async def own_story_fallback(message: Message) -> None:
+    await message.answer("Отправьте свой вариант сказки текстом или голосовым сообщением.")
 
 
 @router.message(BookFlow.choosing_theme, F.text == "Редактировать тему")
@@ -449,6 +526,7 @@ async def build_custom_theme(message: Message, state: FSMContext, user_request: 
     theme_text = selected_theme_text(theme)
     await state.update_data(
         selected_theme=theme_text,
+        own_story_text=None,
         custom_theme_draft=theme_text,
         custom_theme_json=theme.model_dump_json(),
     )
@@ -492,6 +570,7 @@ async def restart_theme_choice(message: Message, state: FSMContext) -> None:
     options = StoryThemeOptions.model_validate_json(data["theme_options_json"])
     await state.update_data(
         selected_theme=None,
+        own_story_text=None,
         custom_theme_draft=None,
         custom_theme_json=None,
     )
@@ -509,7 +588,8 @@ async def reviewing_custom_theme_fallback(message: Message) -> None:
 @router.message(BookFlow.choosing_theme)
 async def choose_theme_fallback(message: Message) -> None:
     await message.answer(
-        "Выберите тематику кнопкой в меню, нажмите «Редактировать тему» или «Предложить ещё»."
+        "Выберите тематику кнопкой в меню, нажмите «Свой вариант», "
+        "«Редактировать тему» или «Предложить ещё»."
     )
 
 
@@ -528,13 +608,27 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     child_info = data["child_info"]
     selected_theme = data["selected_theme"]
+    own_story_text = data.get("own_story_text")
 
-    await message.answer("Генерирую сказку и разбиваю её по страницам. Это может занять немного времени.")
-    try:
-        story = await asyncio.wait_for(
-            generate_story(child_info, selected_theme, pages_count),
-            timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+    if own_story_text:
+        progress_text = (
+            "Разбиваю ваш текст на страницы без переписывания. "
+            "Это может занять немного времени."
         )
+    else:
+        progress_text = "Генерирую сказку и разбиваю её по страницам. Это может занять немного времени."
+    await message.answer(progress_text)
+    try:
+        if own_story_text:
+            story = await asyncio.wait_for(
+                split_custom_story(child_info, own_story_text, pages_count),
+                timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+            )
+        else:
+            story = await asyncio.wait_for(
+                generate_story(child_info, selected_theme, pages_count),
+                timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
+            )
     except TimeoutError:
         logger.exception("Timed out while generating story")
         await message.answer(
@@ -546,7 +640,7 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     except Exception as exc:
         logger.exception("Failed to generate story")
         await message.answer(
-            "Не получилось сгенерировать сказку через OpenAI.\n\n"
+            "Не получилось подготовить сказку через OpenAI.\n\n"
             f"Техническая ошибка: {type(exc).__name__}: {exc}\n\n"
             "Проверьте OPENAI_API_KEY и точное имя модели в OPENAI_TEXT_MODEL, "
             "затем введите количество страниц ещё раз."

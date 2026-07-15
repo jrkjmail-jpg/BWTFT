@@ -23,13 +23,13 @@ class SceneOptions(BaseModel):
 
 class GeneratedPage(BaseModel):
     page_number: int
-    page_text: str = Field(min_length=100)
+    page_text: str = Field(min_length=1)
     scene_blueprint: str = Field(min_length=100)
 
 
 class StoryDraftPage(BaseModel):
     page_number: int
-    page_text: str = Field(min_length=100)
+    page_text: str = Field(min_length=1)
 
 
 class StoryDraft(BaseModel):
