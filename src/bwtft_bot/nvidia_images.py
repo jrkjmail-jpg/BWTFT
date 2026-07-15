@@ -34,8 +34,6 @@ def _build_payload(prompt: str, reference_images: Sequence[PhotoInput] = ()) -> 
         return settings.nvidia_reference_image_endpoint, {
             "prompt": _reference_prompt(prompt),
             "image": _image_data_url(image_bytes, mime_type),
-            "width": settings.nvidia_image_width,
-            "height": settings.nvidia_image_height,
             "aspect_ratio": "1:1",
             "samples": 1,
         }

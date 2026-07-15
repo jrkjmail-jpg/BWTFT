@@ -45,3 +45,6 @@ def test_nvidia_payload_with_reference_uses_kontext_image_endpoint():
     assert endpoint.endswith("/flux.1-kontext-dev")
     assert payload["image"].startswith("data:image/jpeg;base64,")
     assert "Use the input image only as a visual reference" in payload["prompt"]
+    assert payload["aspect_ratio"] == "1:1"
+    assert "width" not in payload
+    assert "height" not in payload
