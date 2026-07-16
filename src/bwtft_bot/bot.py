@@ -13,7 +13,12 @@ from aiogram.types import BotCommand, BufferedInputFile, Message
 from aiogram.client.default import DefaultBotProperties
 
 from bwtft_bot.config import settings
-from bwtft_bot.custom_story import parse_prescribed_pages
+from bwtft_bot.custom_story import (
+    append_text_to_story,
+    extract_append_text,
+    parse_prescribed_pages,
+    split_plain_text_into_pages,
+)
 from bwtft_bot.db import async_session, init_db
 from bwtft_bot.keyboards import (
     custom_theme_review_keyboard,
@@ -34,7 +39,6 @@ from bwtft_bot.llm import (
     generate_theme_options,
     revise_final_prompt,
     revise_story,
-    split_custom_story,
     transcribe_voice,
 )
 from bwtft_bot.nvidia_images import NvidiaImageError, generate_image
@@ -376,6 +380,7 @@ async def select_theme(message: Message, state: FSMContext) -> None:
     await state.update_data(
         selected_theme=selected_theme_text(selected),
         own_story_text=None,
+        own_story_strict=False,
     )
     await state.set_state(BookFlow.waiting_pages_count)
     await message.answer(
@@ -410,6 +415,7 @@ async def collect_own_story_text(message: Message, state: FSMContext) -> None:
     if prescribed_story is not None:
         await state.update_data(
             own_story_text=own_story_text,
+            own_story_strict=True,
             selected_theme="Свой текст пользователя с готовой разбивкой по страницам.",
             story_json=prescribed_story.model_dump_json(),
         )
@@ -424,6 +430,7 @@ async def collect_own_story_text(message: Message, state: FSMContext) -> None:
 
     await state.update_data(
         own_story_text=own_story_text,
+        own_story_strict=True,
         selected_theme="Свой текст пользователя. Использовать как готовую основу сказки.",
     )
     await state.set_state(BookFlow.waiting_pages_count)
@@ -458,6 +465,7 @@ async def collect_own_story_voice(message: Message, state: FSMContext, bot: Bot)
 
     await state.update_data(
         own_story_text=None,
+        own_story_strict=False,
         selected_theme=f"Свой голосовой вариант пользователя:\n{user_request}",
     )
     await state.set_state(BookFlow.waiting_pages_count)
@@ -547,6 +555,7 @@ async def build_custom_theme(message: Message, state: FSMContext, user_request: 
     await state.update_data(
         selected_theme=theme_text,
         own_story_text=None,
+        own_story_strict=False,
         custom_theme_draft=theme_text,
         custom_theme_json=theme.model_dump_json(),
     )
@@ -591,6 +600,7 @@ async def restart_theme_choice(message: Message, state: FSMContext) -> None:
     await state.update_data(
         selected_theme=None,
         own_story_text=None,
+        own_story_strict=False,
         custom_theme_draft=None,
         custom_theme_json=None,
     )
@@ -647,10 +657,7 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
     await message.answer(progress_text)
     try:
         if own_story_text:
-            story = await asyncio.wait_for(
-                split_custom_story(child_info, own_story_text, pages_count),
-                timeout=BOOK_GENERATION_TIMEOUT_SECONDS,
-            )
+            story = split_plain_text_into_pages(own_story_text, pages_count)
         else:
             story = await asyncio.wait_for(
                 generate_story(child_info, selected_theme, pages_count),
@@ -681,7 +688,18 @@ async def collect_pages_count(message: Message, state: FSMContext) -> None:
 
 @router.message(BookFlow.reviewing_story, F.text == "Редактировать")
 async def request_story_revision(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
     await state.set_state(BookFlow.waiting_story_revision)
+    if data.get("own_story_strict"):
+        await message.answer(
+            "Это текстовый «Свой вариант», поэтому я не буду переписывать сказку.\n\n"
+            "Если нужно продолжить её, пришлите текст так:\n"
+            "«Продолжи сказку этим текстом: ...»\n\n"
+            "Я добавлю этот текст снизу без изменений.",
+            reply_markup=remove_keyboard(),
+        )
+        return
+
     await message.answer(
         "Напишите правки к сказке текстом или отправьте голосовое сообщение. "
         "Можно просить любые изменения: сильно сократить, переписать сюжет, убрать персонажа, "
@@ -727,6 +745,29 @@ async def collect_story_revision_fallback(message: Message) -> None:
 async def apply_story_revision(message: Message, state: FSMContext, revision_text: str) -> None:
     data = await state.get_data()
     story = StoryDraft.model_validate_json(data["story_json"])
+    if data.get("own_story_strict"):
+        append_text = extract_append_text(revision_text)
+        if append_text is None:
+            await message.answer(
+                "Это текстовый «Свой вариант», поэтому я не переписываю сказку через AI.\n\n"
+                "Чтобы добавить продолжение без изменений, отправьте сообщение в формате:\n"
+                "«Продолжи сказку этим текстом: ...»\n\n"
+                "Я просто присоединю присланный текст снизу, сохранив формулировки и пунктуацию."
+            )
+            return
+
+        revised = append_text_to_story(story, append_text)
+        await state.update_data(
+            story_json=revised.model_dump_json(),
+            own_story_text="\n\n".join(page.page_text for page in revised.pages),
+        )
+        await state.set_state(BookFlow.reviewing_story)
+        await message.answer(
+            "Готово. Добавил присланный текст без переписывания и без изменения смысла."
+        )
+        await send_story_review(message, revised)
+        return
+
     await message.answer("Вношу правки в сказку...")
     try:
         revised = await asyncio.wait_for(

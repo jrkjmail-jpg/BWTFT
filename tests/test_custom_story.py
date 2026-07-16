@@ -1,6 +1,11 @@
-from bwtft_bot.custom_story import parse_prescribed_pages
+from bwtft_bot.custom_story import (
+    append_text_to_story,
+    extract_append_text,
+    parse_prescribed_pages,
+    split_plain_text_into_pages,
+)
 from bwtft_bot.prompts import custom_story_split_prompt
-from bwtft_bot.schemas import GeneratedPage, StoryDraftPage
+from bwtft_bot.schemas import GeneratedPage, StoryDraft, StoryDraftPage
 
 
 def test_custom_story_split_prompt_preserves_author_text():
@@ -73,3 +78,31 @@ def test_prescribed_number_sign_pages_are_split_without_rewriting():
     assert story is not None
     assert story.pages[0].page_text == "Аня держит книгу."
     assert story.pages[1].page_text == "На странице светятся котята."
+
+
+def test_plain_custom_story_is_split_without_rewriting_text():
+    text = "Аня открыла окно; свет улыбнулся. Потом она взяла книгу: тихо-тихо."
+
+    story = split_plain_text_into_pages(text, 2)
+
+    assert story.pages[0].page_text + " " + story.pages[1].page_text == text
+    assert ";" in story.pages[0].page_text
+    assert ":" in story.pages[1].page_text
+
+
+def test_append_text_command_preserves_added_text():
+    revision = "Продолжи сказку этим текстом: Аня сказала: «Я вернусь»; и улыбнулась."
+
+    assert extract_append_text(revision) == "Аня сказала: «Я вернусь»; и улыбнулась."
+
+
+def test_append_text_to_story_adds_page_without_rewriting():
+    story = StoryDraft(
+        pages=[StoryDraftPage(page_number=1, page_text="Аня открыла окно.")]
+    )
+    append_text = "Аня сказала: «Я вернусь»; и улыбнулась."
+
+    updated = append_text_to_story(story, append_text)
+
+    assert [page.page_number for page in updated.pages] == [1, 2]
+    assert updated.pages[1].page_text == append_text
